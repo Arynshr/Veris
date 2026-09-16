@@ -17,8 +17,8 @@ class Settings(BaseSettings):
     groq_api_key: str | None = None
     groq_model: str = "openai/gpt-oss-20b"
     
-    max_search_results_per_query: int = 5
-    max_queries_per_plan: int = 6
+    max_search_results_per_query: int = 2
+    max_queries_per_plan: int = 1
     request_timeout_seconds: int = 20
     max_retries: int = 3
     
@@ -38,7 +38,7 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     return Settings()
 
-def config_logging(level: int = logging.INFO) -> None:
+def configure_logging(level: int = logging.INFO) -> None:
     logging.basicConfig(
         level = level,
         stream = sys.stderr,
