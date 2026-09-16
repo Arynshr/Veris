@@ -1,7 +1,7 @@
 [project]
 name = "veris"
 version = "0.1.0"
-description = ""Veris — evidence-grounded research assistant: general research or adverse-media background checks""
+description = "Veris — evidence-grounded research assistant: general research or adverse-media background checks"
 readme = "README.md"
 authors = [
     { name = "Aryanshr", email = "Arynshr@users.noreply.github.com" }
