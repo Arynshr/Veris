@@ -9,42 +9,111 @@ CLI entrypoint (spec section 13).
     veris verify <run_id> [--subject "Jane Doe"]
     veris events <run_id>
 """
+
 import asyncio
 import json
 import logging
 
-import typer 
-from rich.console import Console 
+import typer
+from pydantic import ValidationError
+from rich.console import Console
 from rich.table import Table
 
-from veris.core.config import configure_logging, get_settings
-from veris.core.models import EventStatus, PipelineStage, ResearchMode, ResolvedSubject, SubjectType
+from veris.core.config import (
+    MAX_SEARCH_RESULTS_CEILING,
+    configure_logging,
+    get_settings,
+)
+from veris.core.models import (
+    EventStatus,
+    PipelineStage,
+    ResearchMode,
+    ResolvedSubject,
+    SubjectType,
+)
 from veris.core.storage import RunPersistence
 from veris.pipeline import stream_research
 
-app = typer.Typer(add_completion=False, help="Veris - evidence-grounded research assistant.")
+app = typer.Typer(
+    add_completion=False, help="Veris - evidence-grounded research assistant."
+)
 console = Console()
 
-_STATUS_STYLE = {EventStatus.STARTED: ("◐", "yellow"), EventStatus.COMPLETED: ("●", "green"), EventStatus.FAILED: ("✗", "red")}
+_STATUS_STYLE = {
+    EventStatus.STARTED: ("◐", "yellow"),
+    EventStatus.COMPLETED: ("●", "green"),
+    EventStatus.FAILED: ("✗", "red"),
+}
 
 
 def _print_event(event) -> None:
     icon, style = _STATUS_STYLE[event.status]
     subject = event.data.get("subject", "")
     subject_part = f"[dim]{subject:<18}[/dim]" if subject else " " * 18
-    console.print(f"[{style}]{icon}[/{style}] [bold]{event.stage.value:<13}[/bold] {subject_part} {event.message}")
+    console.print(
+        f"[{style}]{icon}[/{style}] [bold]{event.stage.value:<13}[/bold] {subject_part} {event.message}"
+    )
 
 
 @app.command()
 def research(
-    query: str = typer.Argument(None, help='Free-text request, e.g. "state of solid-state batteries in 2026".'),
-    mode: ResearchMode = typer.Option(None, "--mode", "-m", help="Override auto-detected mode (general | background_check)."),
-    subject: str = typer.Option(None, "--subject", "-s", help="Skip query understanding: research this exact name/topic directly."),
-    subject_type: SubjectType = typer.Option(SubjectType.TOPIC, "--type", "-t", help="Subject type (only used with --subject)."),
-    context: str = typer.Option("", "--context", "-c", help="Disambiguating context, e.g. role, employer, location, timeframe."),
-    output: str = typer.Option("report.md", "--output", "-o", help="Path to write the final Markdown report."),
-    run_id: str = typer.Option(None, "--run-id", help="Optional explicit run id (default: generated)."),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug-level logging."),
+    query: str = typer.Argument(
+        None, help='Free-text request, e.g. "state of solid-state batteries in 2026".'
+    ),
+    mode: ResearchMode = typer.Option(
+        None,
+        "--mode",
+        "-m",
+        help="Override auto-detected mode (general | background_check).",
+    ),
+    subject: str = typer.Option(
+        None,
+        "--subject",
+        "-s",
+        help="Skip query understanding: research this exact name/topic directly.",
+    ),
+    subject_type: SubjectType = typer.Option(
+        SubjectType.TOPIC,
+        "--type",
+        "-t",
+        help="Subject type (only used with --subject).",
+    ),
+    context: str = typer.Option(
+        "",
+        "--context",
+        "-c",
+        help="Disambiguating context, e.g. role, employer, location, timeframe.",
+    ),
+    output: str = typer.Option(
+        "report.md", "--output", "-o", help="Path to write the final Markdown report."
+    ),
+    max_results: int = typer.Option(
+        None,
+        "--max-results",
+        "-n",
+        help=f"Search results kept per query (1-{MAX_SEARCH_RESULTS_CEILING}, default: config value). Overrides for this run only.",
+    ),
+    max_queries: int = typer.Option(
+        None,
+        "--max-queries",
+        help="Max queries per research plan (overrides for this run only).",
+    ),
+    max_subjects: int = typer.Option(
+        None,
+        "--max-subjects",
+        help="Max subjects a role/group request can resolve to, e.g. 'the board of directors of X' (overrides for this run only).",
+    ),
+    searxng_url: str = typer.Option(
+        None,
+        "--searxng-url",
+        help="SearXNG instance URL, e.g. http://localhost:8080. Opt-in only - unset means SearXNG is not used.",
+    ),
+    run_id: str = typer.Option(
+        None, "--run-id", help="Optional explicit run id (default: generated)."
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Enable debug-level logging."
+    ),
 ) -> None:
     """Run the full research pipeline end-to-end, printing progress as it happens."""
     if not query and not subject:
@@ -52,27 +121,66 @@ def research(
         raise typer.Exit(code=1)
 
     configure_logging(logging.DEBUG if verbose else logging.INFO)
-    settings = get_settings()
+    base_settings = get_settings()
+
+    overrides = {
+        k: v
+        for k, v in {
+            "max_search_results_per_query": max_results,
+            "max_queries_per_plan": max_queries,
+            "max_resolved_subjects": max_subjects,
+            "searxng_base_url": searxng_url,
+        }.items()
+        if v is not None
+    }
+    try:
+        # Re-validate (not plain model_copy, which skips field validators)
+        # so --max-results etc. still go through the same bounds
+        # (e.g. le=MAX_SEARCH_RESULTS_CEILING) as config/env values, and
+        # construct a fresh Settings so CLI flags apply only to this run,
+        # never mutating the process-wide cached settings from
+        # get_settings() (which other concurrent/subsequent runs read).
+        settings = (
+            type(base_settings)(**{**base_settings.model_dump(), **overrides})
+            if overrides
+            else base_settings
+        )
+    except ValidationError as exc:
+        console.print(f"[red]Invalid option:[/red] {exc}")
+        raise typer.Exit(code=1)
 
     override = None
     if subject:
-        override = [ResolvedSubject(name=subject, subject_type=subject_type, resolution_confidence=1.0)]
-        effective_query = f"Research on {subject}" + (f" - {context}" if context else "")
+        override = [
+            ResolvedSubject(
+                name=subject, subject_type=subject_type, resolution_confidence=1.0
+            )
+        ]
+        effective_query = f"Research on {subject}" + (
+            f" - {context}" if context else ""
+        )
     else:
         effective_query = query
         console.print(
-            "[dim]Parsing request - role/group queries (\"the board of directors of X\") trigger "
+            '[dim]Parsing request - role/group queries ("the board of directors of X") trigger '
             "an extra subject-resolution search before research begins.[/dim]\n"
         )
 
     async def _run() -> str | None:
         final_run_id = run_id
         async for event in stream_research(
-            query=effective_query, output_path=output, settings=settings, run_id=run_id,
-            resolved_subjects_override=override, research_mode_override=mode,
+            query=effective_query,
+            output_path=output,
+            settings=settings,
+            run_id=run_id,
+            resolved_subjects_override=override,
+            research_mode_override=mode,
         ):
             _print_event(event)
-            if event.stage == PipelineStage.OUTPUT and event.status == EventStatus.COMPLETED:
+            if (
+                event.stage == PipelineStage.OUTPUT
+                and event.status == EventStatus.COMPLETED
+            ):
                 final_run_id = event.data.get("run_id", final_run_id)
         return final_run_id
 
@@ -80,10 +188,14 @@ def research(
         completed_run_id = asyncio.run(_run())
     except Exception as exc:  # noqa: BLE001 - surface pipeline failure clearly; artifacts persisted up to that point
         console.print(f"\n[red]Run failed:[/red] {exc}")
-        console.print("[dim]Progress up to the failure is in runs/<run_id>/events.jsonl and other stage artifacts.[/dim]")
+        console.print(
+            "[dim]Progress up to the failure is in runs/<run_id>/events.jsonl and other stage artifacts.[/dim]"
+        )
         raise typer.Exit(code=1)
 
-    console.print(f"\n[green]Research completed.[/green] [dim](veris inspect {completed_run_id})[/dim]")
+    console.print(
+        f"\n[green]Research completed.[/green] [dim](veris inspect {completed_run_id})[/dim]"
+    )
 
 
 @app.command()
@@ -100,7 +212,9 @@ def events(run_id: str = typer.Argument(..., help="Run id to replay.")) -> None:
         icon, style = _STATUS_STYLE[EventStatus(record["status"])]
         subject = record.get("data", {}).get("subject", "")
         subject_part = f"[dim]{subject:<18}[/dim]" if subject else " " * 18
-        console.print(f"[{style}]{icon}[/{style}] [bold]{record['stage']:<13}[/bold] {subject_part} {record['message']}")
+        console.print(
+            f"[{style}]{icon}[/{style}] [bold]{record['stage']:<13}[/bold] {subject_part} {record['message']}"
+        )
 
 
 @app.command()
@@ -141,21 +255,35 @@ def sources(run_id: str = typer.Argument(..., help="Run id to inspect.")) -> Non
 @app.command()
 def verify(
     run_id: str = typer.Argument(..., help="Run id to inspect."),
-    subject: str = typer.Option(None, "--subject", "-s", help="Filter to one subject (default: all subjects in the run)."),
+    subject: str = typer.Option(
+        None,
+        "--subject",
+        "-s",
+        help="Filter to one subject (default: all subjects in the run).",
+    ),
 ) -> None:
     """Show claim verification results for a run, including subject-match confidence."""
     store = RunPersistence(get_settings(), run_id=run_id)
     try:
         results = store.load_verification(subject=subject)
     except FileNotFoundError:
-        console.print(f"[red]No verification results found for run '{run_id}'" + (f", subject '{subject}'" if subject else "") + ".[/red]")
+        console.print(
+            f"[red]No verification results found for run '{run_id}'"
+            + (f", subject '{subject}'" if subject else "")
+            + ".[/red]"
+        )
         raise typer.Exit(code=1)
 
     if not results:
-        console.print(f"[yellow]No verification results found for run '{run_id}'.[/yellow]")
+        console.print(
+            f"[yellow]No verification results found for run '{run_id}'.[/yellow]"
+        )
         raise typer.Exit(code=1)
 
-    table = Table(title=f"Claim verification for run {run_id}" + (f" — {subject}" if subject else ""))
+    table = Table(
+        title=f"Claim verification for run {run_id}"
+        + (f" — {subject}" if subject else "")
+    )
     table.add_column("Claim ID")
     table.add_column("Status")
     table.add_column("Subject Match")
@@ -164,8 +292,10 @@ def verify(
     for r in results:
         style = "green" if r["status"] == "VERIFIED" else "red"
         table.add_row(
-            r["claim_id"], f"[{style}]{r['status']}[/{style}]",
-            str(r["subject_match_score"]), str(r["source_quality_score"]),
+            r["claim_id"],
+            f"[{style}]{r['status']}[/{style}]",
+            str(r["subject_match_score"]),
+            str(r["source_quality_score"]),
             "; ".join(r.get("reasons", [])),
         )
     console.print(table)

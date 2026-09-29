@@ -3,6 +3,7 @@ Pydantic contracts shared by every pipeline stage (spec section 15).
 Kept in one module since these are small, tightly related data shapes — splitting
 them across files added navigation overhead without real separation of concerns.
 """
+
 from datetime import UTC, datetime
 from enum import StrEnum
 
@@ -14,8 +15,8 @@ class ResearchMode(StrEnum):
     categorization, and report tone downstream. Detected during understanding,
     or set explicitly via --mode."""
 
-    GENERAL = "general"                  
-    BACKGROUND_CHECK = "background_check"  
+    GENERAL = "general"
+    BACKGROUND_CHECK = "background_check"
 
 
 class VerificationStatus(StrEnum):
@@ -33,15 +34,15 @@ class SubjectType(StrEnum):
     PERSON = "person"
     COMPANY = "company"
     GROUP = "group"
-    TOPIC = "topic"  
+    TOPIC = "topic"
 
 
 class SubjectMode(StrEnum):
     """How a free-text request maps to concrete research subjects."""
 
-    SINGLE = "single_subject"      
-    NAMED_LIST = "named_list"      
-    ROLE_GROUP = "role_group"     
+    SINGLE = "single_subject"
+    NAMED_LIST = "named_list"
+    ROLE_GROUP = "role_group"
 
 
 class AdverseCategory(StrEnum):
@@ -52,7 +53,7 @@ class AdverseCategory(StrEnum):
     CRIMINAL = "criminal"
     FINANCIAL = "financial"
     REPUTATIONAL = "reputational"
-    GENERAL = "general"  
+    GENERAL = "general"
 
 
 class PipelineStage(StrEnum):
@@ -81,12 +82,14 @@ class PipelineEvent(BaseModel):
     status: EventStatus
     message: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    data: dict = Field(default_factory=dict)  # may include "subject" for per-subject stages
+    data: dict = Field(
+        default_factory=dict
+    )  # may include "subject" for per-subject stages
 
 
 class Entity(BaseModel):
     text: str
-    label: str  
+    label: str
     start_char: int
     end_char: int
 
@@ -103,8 +106,12 @@ class QueryUnderstanding(BaseModel):
     mode: SubjectMode
     research_mode: ResearchMode = ResearchMode.GENERAL
     organization: str | None = None
-    role_terms: list[str] = Field(default_factory=list)         # e.g. ["CEO", "CFO"], ["board of directors"]
-    explicit_subjects: list[str] = Field(default_factory=list)  # names/topics given verbatim
+    role_terms: list[str] = Field(
+        default_factory=list
+    )  # e.g. ["CEO", "CFO"], ["board of directors"]
+    explicit_subjects: list[str] = Field(
+        default_factory=list
+    )  # names/topics given verbatim
     raw_query: str
 
 
@@ -116,7 +123,9 @@ class ResolvedSubject(BaseModel):
     role: str | None = None
     organization: str | None = None
     resolution_confidence: float = Field(
-        default=1.0, ge=0.0, le=1.0,
+        default=1.0,
+        ge=0.0,
+        le=1.0,
         description="1.0 = user named this directly; lower = inferred via a resolution search.",
     )
 
@@ -129,7 +138,7 @@ class SearchQuery(BaseModel):
 
 
 class SourceRequirement(BaseModel):
-    category: str  
+    category: str
     min_sources: int = 1
 
 
@@ -155,7 +164,7 @@ class Document(BaseModel):
     canonical_url: str
     title: str
     content: str
-    source: str  
+    source: str
     retrieved_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     published_at: datetime | None = None
     content_hash: str
@@ -175,20 +184,27 @@ class Evidence(BaseModel):
     supporting_passage: str
     source_metadata: SourceMetadata
     category: AdverseCategory = AdverseCategory.GENERAL
-    relevance_score: float = Field(default=0.0, description="TF-IDF cosine similarity to the subject/context query.")
+    relevance_score: float = Field(
+        default=0.0,
+        description="TF-IDF cosine similarity to the subject/context query.",
+    )
 
 
 class Claim(BaseModel):
     claim_id: str
     text: str
-    subject: str 
+    subject: str
     evidence_ids: list[str] = Field(default_factory=list)
 
 
 class VerificationResult(BaseModel):
     claim_id: str
     status: VerificationStatus
-    subject_match_score: float = Field(ge=0.0, le=1.0, description="Does the claim actually reference the subject/topic?")
+    subject_match_score: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Does the claim actually reference the subject/topic?",
+    )
     entity_match_score: float = Field(ge=0.0, le=1.0)
     source_quality_score: float = Field(ge=0.0, le=1.0)
     reasons: list[str] = Field(default_factory=list)
