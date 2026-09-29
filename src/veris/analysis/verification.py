@@ -2,16 +2,32 @@
 Claim verification (spec section 10): entity matching, validity, source quality.
 Produces VERIFIED / CONFLICTED only - never a probability-of-truth score.
 """
+
 import uuid
 
 from veris.core.config import Settings
-from veris.core.models import Claim, Entity, Evidence, ResearchMode, VerificationResult, VerificationStatus
+from veris.core.models import (
+    Claim,
+    Entity,
+    Evidence,
+    ResearchMode,
+    VerificationResult,
+    VerificationStatus,
+)
 
 _SOURCE_QUALITY_THRESHOLD = 0.5
 _MIN_CLAIM_LENGTH = 30
 
 _HIGH_QUALITY_TLDS = (".gov", ".edu", ".int")
-_HIGH_QUALITY_DOMAINS = ("reuters.com", "apnews.com", "bbc.com", "bloomberg.com", "wsj.com", "ft.com", "nature.com")
+_HIGH_QUALITY_DOMAINS = (
+    "reuters.com",
+    "apnews.com",
+    "bbc.com",
+    "bloomberg.com",
+    "wsj.com",
+    "ft.com",
+    "nature.com",
+)
 _LOW_QUALITY_MARKERS = ("blogspot.", "medium.com/@", "wordpress.com")
 
 
@@ -46,7 +62,12 @@ def _entity_match_score(claim_text: str, entities: list[Entity]) -> float:
 def _build_claims(evidence_list: list[Evidence], subject: str) -> list[Claim]:
     """v0.1: one candidate claim per evidence passage (traceability per spec section 9)."""
     return [
-        Claim(claim_id=f"claim_{uuid.uuid4().hex[:10]}", text=ev.claim, subject=subject, evidence_ids=[ev.evidence_id])
+        Claim(
+            claim_id=f"claim_{uuid.uuid4().hex[:10]}",
+            text=ev.claim,
+            subject=subject,
+            evidence_ids=[ev.evidence_id],
+        )
         for ev in evidence_list
     ]
 
@@ -69,11 +90,15 @@ def run_verification(
     )
 
     for claim in claims:
-        related_evidence = [evidence_by_id[eid] for eid in claim.evidence_ids if eid in evidence_by_id]
+        related_evidence = [
+            evidence_by_id[eid] for eid in claim.evidence_ids if eid in evidence_by_id
+        ]
 
         subject_score = _subject_match_score(claim.text, subject)
         entity_score = _entity_match_score(claim.text, entities)
-        quality_scores = [_score_source(e.source_metadata.source) for e in related_evidence] or [0.0]
+        quality_scores = [
+            _score_source(e.source_metadata.source) for e in related_evidence
+        ] or [0.0]
         quality_score = sum(quality_scores) / len(quality_scores)
         valid = len(claim.text.strip()) >= _MIN_CLAIM_LENGTH
 
@@ -89,17 +114,25 @@ def run_verification(
 
         status = (
             VerificationStatus.VERIFIED
-            if valid and subject_score >= settings.min_subject_name_overlap and quality_score >= _SOURCE_QUALITY_THRESHOLD and related_evidence
+            if valid
+            and subject_score >= settings.min_subject_name_overlap
+            and quality_score >= _SOURCE_QUALITY_THRESHOLD
+            and related_evidence
             else VerificationStatus.CONFLICTED
         )
         if status == VerificationStatus.VERIFIED:
-            reasons = ["subject clearly referenced, source quality and validity checks passed"]
+            reasons = [
+                "subject clearly referenced, source quality and validity checks passed"
+            ]
 
         results.append(
             VerificationResult(
-                claim_id=claim.claim_id, status=status,
-                subject_match_score=round(subject_score, 2), entity_match_score=round(entity_score, 2),
-                source_quality_score=round(quality_score, 2), reasons=reasons,
+                claim_id=claim.claim_id,
+                status=status,
+                subject_match_score=round(subject_score, 2),
+                entity_match_score=round(entity_score, 2),
+                source_quality_score=round(quality_score, 2),
+                reasons=reasons,
             )
         )
     return claims, results
