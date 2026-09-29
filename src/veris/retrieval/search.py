@@ -3,12 +3,13 @@ Search layer: a common SearchProvider interface with three
 backends, orchestrated with fallback Tavily -> Firecrawl -> SearXNG. A single
 provider failure never crashes the run
 """
+
 import asyncio
 from abc import ABC, abstractmethod
 
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
 from tavily import TavilyClient
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from veris.core.config import Settings, get_logger
 from veris.core.models import SearchProviderName, SearchQuery, SearchResult
@@ -19,29 +20,41 @@ _FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v1/search"
 
 
 class ProviderUnavailableError(RuntimeError):
-    """Raised when a provider is misconfigured (e.g. missing API key)."""
+    """Raised when a provider is misconfigured."""
 
 
 class SearchProvider(ABC):
     name: SearchProviderName
 
     @abstractmethod
-    async def search(self, query: SearchQuery, max_results: int, news_bias: bool = False) -> list[SearchResult]:
+    async def search(
+        self, query: SearchQuery, max_results: int, news_bias: bool = False
+    ) -> list[SearchResult]:
         """Return ranked results. Must raise on hard failure so the caller can fall back."""
 
 
 class TavilyProvider(SearchProvider):
     name = SearchProviderName.TAVILY
 
-    def __init__(self, api_key: str | None, max_retries: int = 3, lookback_days: int | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str | None,
+        max_retries: int = 3,
+        lookback_days: int | None = None,
+    ) -> None:
         if not api_key:
             raise ProviderUnavailableError("TAVILY_API_KEY not configured")
         self._client = TavilyClient(api_key=api_key)
         self._max_retries = max_retries
         self._lookback_days = lookback_days
 
-    async def search(self, query: SearchQuery, max_results: int, news_bias: bool = False) -> list[SearchResult]:
-        @retry(stop=stop_after_attempt(self._max_retries), wait=wait_exponential(multiplier=1, min=1, max=8))
+    async def search(
+        self, query: SearchQuery, max_results: int, news_bias: bool = False
+    ) -> list[SearchResult]:
+        @retry(
+            stop=stop_after_attempt(self._max_retries),
+            wait=wait_exponential(multiplier=1, min=1, max=8),
+        )
         def _call():
             kwargs = {"query": query.text, "max_results": max_results}
             if news_bias:
@@ -53,8 +66,12 @@ class TavilyProvider(SearchProvider):
         response = await asyncio.to_thread(_call)
         return [
             SearchResult(
-                query_id=query.query_id, provider=self.name, url=item["url"],
-                title=item.get("title", ""), snippet=item.get("content", ""), rank=rank,
+                query_id=query.query_id,
+                provider=self.name,
+                url=item["url"],
+                title=item.get("title", ""),
+                snippet=item.get("content", ""),
+                rank=rank,
             )
             for rank, item in enumerate(response.get("results", []), start=1)
         ]
@@ -65,15 +82,22 @@ class FirecrawlProvider(SearchProvider):
 
     name = SearchProviderName.FIRECRAWL
 
-    def __init__(self, api_key: str | None, timeout: int = 20, max_retries: int = 3) -> None:
+    def __init__(
+        self, api_key: str | None, timeout: int = 20, max_retries: int = 3
+    ) -> None:
         if not api_key:
             raise ProviderUnavailableError("FIRECRAWL_API_KEY not configured")
         self._api_key = api_key
         self._timeout = timeout
         self._max_retries = max_retries
 
-    async def search(self, query: SearchQuery, max_results: int, news_bias: bool = False) -> list[SearchResult]:
-        @retry(stop=stop_after_attempt(self._max_retries), wait=wait_exponential(multiplier=1, min=1, max=8))
+    async def search(
+        self, query: SearchQuery, max_results: int, news_bias: bool = False
+    ) -> list[SearchResult]:
+        @retry(
+            stop=stop_after_attempt(self._max_retries),
+            wait=wait_exponential(multiplier=1, min=1, max=8),
+        )
         async def _call():
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 resp = await client.post(
@@ -87,8 +111,12 @@ class FirecrawlProvider(SearchProvider):
         data = await _call()
         return [
             SearchResult(
-                query_id=query.query_id, provider=self.name, url=item["url"],
-                title=item.get("title", ""), snippet=item.get("description", ""), rank=rank,
+                query_id=query.query_id,
+                provider=self.name,
+                url=item["url"],
+                title=item.get("title", ""),
+                snippet=item.get("description", ""),
+                rank=rank,
             )
             for rank, item in enumerate(data.get("data", [])[:max_results], start=1)
         ]
@@ -99,26 +127,40 @@ class SearXNGProvider(SearchProvider):
 
     name = SearchProviderName.SEARXNG
 
-    def __init__(self, base_url: str | None, timeout: int = 20, max_retries: int = 3) -> None:
+    def __init__(
+        self, base_url: str | None, timeout: int = 20, max_retries: int = 3
+    ) -> None:
         if not base_url:
             raise ProviderUnavailableError("SEARXNG_BASE_URL not configured")
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
         self._max_retries = max_retries
 
-    async def search(self, query: SearchQuery, max_results: int, news_bias: bool = False) -> list[SearchResult]:
-        @retry(stop=stop_after_attempt(self._max_retries), wait=wait_exponential(multiplier=1, min=1, max=8))
+    async def search(
+        self, query: SearchQuery, max_results: int, news_bias: bool = False
+    ) -> list[SearchResult]:
+        @retry(
+            stop=stop_after_attempt(self._max_retries),
+            wait=wait_exponential(multiplier=1, min=1, max=8),
+        )
         async def _call():
             async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.get(f"{self._base_url}/search", params={"q": query.text, "format": "json"})
+                resp = await client.get(
+                    f"{self._base_url}/search",
+                    params={"q": query.text, "format": "json"},
+                )
                 resp.raise_for_status()
                 return resp.json()
 
         data = await _call()
         return [
             SearchResult(
-                query_id=query.query_id, provider=self.name, url=item["url"],
-                title=item.get("title", ""), snippet=item.get("content", ""), rank=rank,
+                query_id=query.query_id,
+                provider=self.name,
+                url=item["url"],
+                title=item.get("title", ""),
+                snippet=item.get("content", ""),
+                rank=rank,
             )
             for rank, item in enumerate(data.get("results", [])[:max_results], start=1)
         ]
@@ -130,9 +172,30 @@ def build_provider_chain(settings: Settings) -> list[SearchProvider]:
     re-triggering SearXNG's always-configured bug and re-logging warnings)."""
     chain: list[SearchProvider] = []
     for provider_cls, kwargs in (
-        (TavilyProvider, {"api_key": settings.tavily_api_key, "max_retries": settings.max_retries, "lookback_days": settings.adverse_lookback_days}),
-        (FirecrawlProvider, {"api_key": settings.firecrawl_api_key, "timeout": settings.request_timeout_seconds, "max_retries": settings.max_retries}),
-        (SearXNGProvider, {"base_url": settings.searxng_base_url, "timeout": settings.request_timeout_seconds, "max_retries": settings.max_retries}),
+        (
+            TavilyProvider,
+            {
+                "api_key": settings.tavily_api_key,
+                "max_retries": settings.max_retries,
+                "lookback_days": settings.adverse_lookback_days,
+            },
+        ),
+        (
+            FirecrawlProvider,
+            {
+                "api_key": settings.firecrawl_api_key,
+                "timeout": settings.request_timeout_seconds,
+                "max_retries": settings.max_retries,
+            },
+        ),
+        (
+            SearXNGProvider,
+            {
+                "base_url": settings.searxng_base_url,
+                "timeout": settings.request_timeout_seconds,
+                "max_retries": settings.max_retries,
+            },
+        ),
     ):
         try:
             chain.append(provider_cls(**kwargs))
@@ -146,17 +209,49 @@ def build_provider_chain(settings: Settings) -> list[SearchProvider]:
     return chain
 
 
+def _cache_key(query: SearchQuery, settings: Settings, news_bias: bool) -> str:
+    """Normalize so trivially-different-but-identical queries (whitespace,
+    case) still hit the cache."""
+    return f"{query.text.strip().lower()}|{news_bias}|{settings.max_search_results_per_query}"
+
+
 async def search_with_fallback(
-    query: SearchQuery, settings: Settings, chain: list[SearchProvider], news_bias: bool = False,
+    query: SearchQuery,
+    settings: Settings,
+    chain: list[SearchProvider],
+    news_bias: bool = False,
+    cache: dict[str, list[SearchResult]] | None = None,
 ) -> list[SearchResult]:
+    """Run one query through the provider fallback chain"""
+    key = _cache_key(query, settings, news_bias) if cache is not None else None
+    if cache is not None and key in cache:
+        logger.debug("Search cache hit for query '%s'", query.text)
+        return cache[key]
+
     last_error: Exception | None = None
+    results: list[SearchResult] = []
     for provider in chain:
         try:
-            results = await provider.search(query, settings.max_search_results_per_query, news_bias=news_bias)
+            results = await provider.search(
+                query, settings.max_search_results_per_query, news_bias=news_bias
+            )
             if results:
-                return results
-        except Exception as exc: 
-            logger.warning("Search provider %s failed for query '%s': %s", provider.name, query.text, exc)
+                break
+        except Exception as exc:
+            logger.warning(
+                "Search provider %s failed for query '%s': %s",
+                provider.name,
+                query.text,
+                exc,
+            )
             last_error = exc
-    logger.error("All search providers returned nothing for query '%s': %s", query.text, last_error or "no results")
-    return []
+    else:
+        logger.error(
+            "All search providers returned nothing for query '%s': %s",
+            query.text,
+            last_error or "no results",
+        )
+
+    if cache is not None:
+        cache[key] = results
+    return results
