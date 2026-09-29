@@ -163,10 +163,14 @@ async def _run_subject_pipeline(
         store,
         PipelineStage.RETRIEVAL,
         EventStatus.STARTED,
-        f"Extracting {len(search_results)} pages for {name}",
+        f"Extracting up to {settings.max_documents_per_subject} pages for {name}",
         subject=name,
     )
-    documents = await retrieve_documents(search_results, cache=document_cache)
+    documents = await retrieve_documents(
+        search_results,
+        cache=document_cache,
+        max_documents=settings.max_documents_per_subject,
+    )
     yield _emit(
         store,
         PipelineStage.RETRIEVAL,

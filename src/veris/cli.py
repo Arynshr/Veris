@@ -98,6 +98,12 @@ def research(
         "--max-queries",
         help="Max queries per research plan (overrides for this run only).",
     ),
+    max_documents: int = typer.Option(
+        None,
+        "--max-documents",
+        "-d",
+        help="Unique pages actually crawled per subject, best-ranked first (default: config value). Lower this if synthesis hits the model's token-per-minute limit.",
+    ),
     max_subjects: int = typer.Option(
         None,
         "--max-subjects",
@@ -128,6 +134,7 @@ def research(
         for k, v in {
             "max_search_results_per_query": max_results,
             "max_queries_per_plan": max_queries,
+            "max_documents_per_subject": max_documents,
             "max_resolved_subjects": max_subjects,
             "searxng_base_url": searxng_url,
         }.items()

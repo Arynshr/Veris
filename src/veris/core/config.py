@@ -8,7 +8,7 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-MAX_SEARCH_RESULTS_CEILING = 5
+MAX_SEARCH_RESULTS_CEILING = 10
 
 
 class Settings(BaseSettings):
@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     # Search providers
     tavily_api_key: str | None = None
     firecrawl_api_key: str | None = None
-    searxng_base_url: str = "http://localhost:8080"
+    searxng_base_url: str | None = None
 
     groq_api_key: str | None = None
     groq_model: str = "openai/gpt-oss-20b"
@@ -28,6 +28,8 @@ class Settings(BaseSettings):
         default=2, ge=1, le=MAX_SEARCH_RESULTS_CEILING
     )
     max_queries_per_plan: int = Field(default=8, ge=1, le=25)
+    max_documents_per_subject: int = Field(default=10, ge=1, le=50)
+    max_synthesis_evidence_per_subject: int = Field(default=15, ge=1, le=100)
     request_timeout_seconds: int = 20
     max_retries: int = 3
 
