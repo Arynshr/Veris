@@ -1,11 +1,13 @@
-""" 
-Only VERIFIED claims are handed to the model; 
-CONFLICTED claims are never presented as fact. 
-GENERAL mode produces a plain cited research report; 
+"""
+Only VERIFIED claims are handed to the model;
+CONFLICTED claims are never presented as fact.
+GENERAL mode produces a plain cited research report;
 BACKGROUND_CHECK mode produces an adverse-media
 report grouped subject -> risk category, with an identity/screening disclaimer.
 Deterministic non-LLM fallback in both modes so the pipeline never hard-fails.
 """
+
+import asyncio
 from collections import defaultdict
 
 from groq import Groq
@@ -60,10 +62,16 @@ _SCREENING_DISCLAIMER = (
 
 def _resolution_summary(subjects: list[ResolvedSubject]) -> str:
     if len(subjects) == 1 and subjects[0].resolution_confidence >= 0.99:
-        return ""  # single directly-named subject - resolution transparency adds no value
+        return (
+            ""  # single directly-named subject - resolution transparency adds no value
+        )
     lines = ["## Subjects Covered", ""]
     for s in subjects:
-        confidence_note = "given directly" if s.resolution_confidence >= 0.99 else f"resolved via search, confidence {s.resolution_confidence:.1f}"
+        confidence_note = (
+            "given directly"
+            if s.resolution_confidence >= 0.99
+            else f"resolved via search, confidence {s.resolution_confidence:.1f}"
+        )
         role_note = f" — {s.role}" if s.role else ""
         lines.append(f"- **{s.name}**{role_note} ({confidence_note})")
     lines.append("")
@@ -71,12 +79,16 @@ def _resolution_summary(subjects: list[ResolvedSubject]) -> str:
 
 
 def _grouped_by_subject_category(
-    claims: list[Claim], verifications: list[VerificationResult], evidence_list: list[Evidence]
+    claims: list[Claim],
+    verifications: list[VerificationResult],
+    evidence_list: list[Evidence],
 ) -> dict[str, list[tuple[Claim, Evidence]]]:
     """subject -> [(claim, evidence)], sorted by evidence relevance_score descending."""
     evidence_by_id = {e.evidence_id: e for e in evidence_list}
     claim_by_id = {c.claim_id: c for c in claims}
-    verified_ids = {v.claim_id for v in verifications if v.status == VerificationStatus.VERIFIED}
+    verified_ids = {
+        v.claim_id for v in verifications if v.status == VerificationStatus.VERIFIED
+    }
 
     grouped: dict[str, list[tuple[Claim, Evidence]]] = defaultdict(list)
     for claim_id in verified_ids:
@@ -103,7 +115,9 @@ def _build_sources_block(evidence_items: list[Evidence]) -> str:
     return "\n".join(lines)
 
 
-def _fallback_general_report(subjects: list[ResolvedSubject], grouped: dict[str, list[tuple[Claim, Evidence]]]) -> str:
+def _fallback_general_report(
+    subjects: list[ResolvedSubject], grouped: dict[str, list[tuple[Claim, Evidence]]]
+) -> str:
     lines = ["# Research Report", ""]
     resolution = _resolution_summary(subjects)
     if resolution:
@@ -118,23 +132,37 @@ def _fallback_general_report(subjects: list[ResolvedSubject], grouped: dict[str,
             continue
         for claim, ev in items:
             all_evidence.append(ev)
-            lines.append(f"- {claim.text} ({ev.source_metadata.source}, {ev.source_metadata.url})")
+            lines.append(
+                f"- {claim.text} ({ev.source_metadata.source}, {ev.source_metadata.url})"
+            )
         lines.append("")
     lines.append("## Sources")
     lines.append(_build_sources_block(all_evidence))
     return "\n".join(lines)
 
 
-def _fallback_background_check_report(subjects: list[ResolvedSubject], grouped: dict[str, list[tuple[Claim, Evidence]]]) -> str:
-    lines = ["# Background Check Report", "", _SCREENING_DISCLAIMER, "", _resolution_summary(subjects)]
+def _fallback_background_check_report(
+    subjects: list[ResolvedSubject], grouped: dict[str, list[tuple[Claim, Evidence]]]
+) -> str:
+    lines = [
+        "# Background Check Report",
+        "",
+        _SCREENING_DISCLAIMER,
+        "",
+        _resolution_summary(subjects),
+    ]
     all_evidence: list[Evidence] = []
     for subject in subjects:
         items = grouped.get(subject.name, [])
         lines.append(f"## {subject.name}")
         if not items:
-            lines.append("_No adverse findings passed verification for this subject._\n")
+            lines.append(
+                "_No adverse findings passed verification for this subject._\n"
+            )
             continue
-        by_category: dict[AdverseCategory, list[tuple[Claim, Evidence]]] = defaultdict(list)
+        by_category: dict[AdverseCategory, list[tuple[Claim, Evidence]]] = defaultdict(
+            list
+        )
         for claim, ev in items:
             by_category[ev.category].append((claim, ev))
         for category, heading in _CATEGORY_HEADINGS.items():
@@ -144,14 +172,39 @@ def _fallback_background_check_report(subjects: list[ResolvedSubject], grouped: 
             lines.append(f"### {heading}")
             for claim, ev in cat_items:
                 all_evidence.append(ev)
-                lines.append(f"- {claim.text} (reported by {ev.source_metadata.source}, {ev.source_metadata.url})")
+                lines.append(
+                    f"- {claim.text} (reported by {ev.source_metadata.source}, {ev.source_metadata.url})"
+                )
             lines.append("")
     lines.append("## Sources")
     lines.append(_build_sources_block(all_evidence))
     return "\n".join(lines)
 
 
-def run_synthesis(
+async def run_synthesis(
+    subjects: list[ResolvedSubject],
+    claims: list[Claim],
+    verifications: list[VerificationResult],
+    evidence_list: list[Evidence],
+    settings: Settings,
+    research_mode: ResearchMode = ResearchMode.GENERAL,
+) -> str:
+    """Synthesis entrypoint. The actual Groq call is synchronous/blocking and
+    is offloaded to a thread (see _run_synthesis_llm) so it doesn't stall the
+    async pipeline - consistent with the same fix in understanding.py and
+    planning.py."""
+    return await asyncio.to_thread(
+        _run_synthesis_sync,
+        subjects,
+        claims,
+        verifications,
+        evidence_list,
+        settings,
+        research_mode,
+    )
+
+
+def _run_synthesis_sync(
     subjects: list[ResolvedSubject],
     claims: list[Claim],
     verifications: list[VerificationResult],
@@ -163,16 +216,22 @@ def run_synthesis(
     is_background_check = research_mode == ResearchMode.BACKGROUND_CHECK
 
     if not settings.groq_api_key:
-        return _fallback_background_check_report(subjects, grouped) if is_background_check else _fallback_general_report(subjects, grouped)
+        return (
+            _fallback_background_check_report(subjects, grouped)
+            if is_background_check
+            else _fallback_general_report(subjects, grouped)
+        )
 
     all_evidence = [ev for items in grouped.values() for _, ev in items]
     if not all_evidence:
-        title = "# Background Check Report" if is_background_check else "# Research Report"
+        title = (
+            "# Background Check Report" if is_background_check else "# Research Report"
+        )
         no_findings = (
             "No adverse findings passed verification for any subject. Either no adverse "
             "coverage was found, or candidate matches could not be confidently attributed."
-            if is_background_check else
-            "No claims passed verification for any subject. Consider broadening the query "
+            if is_background_check
+            else "No claims passed verification for any subject. Consider broadening the query "
             "or adding search providers."
         )
         disclaimer = f"\n\n{_SCREENING_DISCLAIMER}" if is_background_check else ""
@@ -191,7 +250,11 @@ def run_synthesis(
     findings_block = "\n".join(findings_lines)
 
     client = Groq(api_key=settings.groq_api_key)
-    system_prompt = _BACKGROUND_CHECK_SYSTEM_PROMPT if is_background_check else _GENERAL_SYSTEM_PROMPT
+    system_prompt = (
+        _BACKGROUND_CHECK_SYSTEM_PROMPT
+        if is_background_check
+        else _GENERAL_SYSTEM_PROMPT
+    )
     user_msg = (
         f"Subjects: {', '.join(s.name for s in subjects)}\n\n"
         f"Verified findings by subject:\n{findings_block}\n\n"
@@ -200,7 +263,10 @@ def run_synthesis(
     )
     response = client.chat.completions.create(
         model=settings.groq_model,
-        messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_msg}],
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_msg},
+        ],
         temperature=0.2,
     )
     body = response.choices[0].message.content
