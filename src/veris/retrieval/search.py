@@ -20,7 +20,7 @@ _FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v1/search"
 
 
 class ProviderUnavailableError(RuntimeError):
-    """Raised when a provider is misconfigured."""
+    """Raised when a provider is misconfigured (e.g. missing API key)."""
 
 
 class SearchProvider(ABC):
@@ -169,7 +169,8 @@ class SearXNGProvider(SearchProvider):
 def build_provider_chain(settings: Settings) -> list[SearchProvider]:
     """Build the fallback chain once per run (not once per query - previously
     rebuilt on every single search call, up to ~48 times per run, each
-    re-triggering SearXNG's always-configured bug and re-logging warnings)."""
+    re-triggering warnings and, before SearXNG's URL stopped defaulting to
+    localhost, a doomed connection attempt on every single one of them)."""
     chain: list[SearchProvider] = []
     for provider_cls, kwargs in (
         (
@@ -222,7 +223,17 @@ async def search_with_fallback(
     news_bias: bool = False,
     cache: dict[str, list[SearchResult]] | None = None,
 ) -> list[SearchResult]:
-    """Run one query through the provider fallback chain"""
+    """Run one query through the provider fallback chain.
+
+    `cache`, when passed, is a dict shared across an entire run (planning
+    dedupes *planned* queries, but role-resolution queries and per-subject
+    plan queries are generated independently and can still coincide on
+    identical text - e.g. two role terms normalizing to the same lookup, or
+    the same query re-appearing for two resolved subjects). Without this,
+    identical query text was re-sent to the provider chain every time it
+    showed up, each paying its own retry/backoff cost - the literal
+    "searching the same task multiple times" bug.
+    """
     key = _cache_key(query, settings, news_bias) if cache is not None else None
     if cache is not None and key in cache:
         logger.debug("Search cache hit for query '%s'", query.text)

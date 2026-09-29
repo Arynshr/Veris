@@ -59,6 +59,16 @@ _SCREENING_DISCLAIMER = (
     "before relying on any finding. This is not a legal, credit, or compliance determination."
 )
 
+# Prompt-only truncation (persisted evidence.json always keeps the full
+# text - this only shortens what gets sent to Groq). A single unbounded
+# claim sentence is rare but does happen with dense source text, and one
+# long outlier is enough to tip a request over the tokens-per-minute limit.
+_MAX_CLAIM_CHARS_IN_PROMPT = 260
+
+
+def _truncate(text: str, limit: int = _MAX_CLAIM_CHARS_IN_PROMPT) -> str:
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
 
 def _resolution_summary(subjects: list[ResolvedSubject]) -> str:
     if len(subjects) == 1 and subjects[0].resolution_confidence >= 0.99:
@@ -237,16 +247,31 @@ def _run_synthesis_sync(
         disclaimer = f"\n\n{_SCREENING_DISCLAIMER}" if is_background_check else ""
         return f"{title}{disclaimer}\n\n{_resolution_summary(subjects)}{no_findings}\n"
 
+    # Cap per-subject items (already sorted by relevance_score descending in
+    # _grouped_by_subject_category) and truncate each claim's prompt text -
+    # this is what actually keeps a single Groq request under the model's
+    # tokens-per-minute limit, independent of how many documents/subjects
+    # fed into evidence mapping upstream. `all_evidence`/`sources_block` are
+    # rebuilt from the *capped* items so the numbered source list matches
+    # exactly what's cited in the prompt.
+    capped_grouped = {
+        subject_name: items[: settings.max_synthesis_evidence_per_subject]
+        for subject_name, items in grouped.items()
+    }
+    all_evidence = [ev for items in capped_grouped.values() for _, ev in items]
+
     sources_block = _build_sources_block(all_evidence)
     findings_lines = []
     for subject in subjects:
-        items = grouped.get(subject.name, [])
+        items = capped_grouped.get(subject.name, [])
         findings_lines.append(f"## {subject.name}")
         if not items:
             findings_lines.append("(no verified findings)")
             continue
         for claim, ev in items:
-            findings_lines.append(f"- {claim.text} (source: {ev.source_metadata.url})")
+            findings_lines.append(
+                f"- {_truncate(claim.text)} (source: {ev.source_metadata.url})"
+            )
     findings_block = "\n".join(findings_lines)
 
     client = Groq(api_key=settings.groq_api_key)

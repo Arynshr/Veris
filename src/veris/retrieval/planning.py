@@ -132,7 +132,11 @@ def _normalize(text: str) -> str:
 
 def _dedupe_queries(queries: list[SearchQuery]) -> list[SearchQuery]:
     """Drop exact/near-duplicate query text, keeping the first (i.e.
-    highest-priority / template-before-LLM) occurrence."""
+    highest-priority / template-before-LLM) occurrence. Previously template
+    queries and LLM-augmented queries were never cross-checked, so the LLM
+    - which wasn't told what had already been planned - would frequently
+    regenerate a query already covered by a template, and that duplicate
+    would be searched a second time for no new information."""
     seen: set[str] = set()
     deduped: list[SearchQuery] = []
     for q in queries:
@@ -155,6 +159,11 @@ async def run_planning(
 
     if settings.groq_api_key:
         already_planned = [q.text for q in plan.queries]
+        # Groq call is a blocking network request; run off the event loop so
+        # it doesn't stall other concurrent work in the pipeline (other
+        # subjects' searches, event streaming to the CLI) - a synchronous
+        # call here previously made the whole async pipeline appear to hang
+        # for the duration of the request.
         llm_queries = await asyncio.to_thread(
             _llm_augment, ingestion, settings, subject, research_mode, already_planned
         )
@@ -173,7 +182,6 @@ def _llm_augment(
     research_mode: ResearchMode,
     already_planned: list[str],
 ) -> list[SearchQuery]:
-    client = Groq(api_key=settings.groq_api_key)
     aliases = (
         ", ".join(
             e.text for e in ingestion.entities if e.text.lower() != subject.lower()
@@ -194,6 +202,12 @@ def _llm_augment(
     )
 
     try:
+        # Both client construction and the request itself can fail (bad key
+        # format, network error, timeout) - all of it belongs in the same
+        # try/except so any failure here falls back to template-only
+        # queries instead of raising out of what's meant to be a
+        # best-effort augmentation step.
+        client = Groq(api_key=settings.groq_api_key)
         response = client.chat.completions.create(
             model=settings.groq_model,
             messages=[

@@ -66,18 +66,42 @@ async def _extract_document(url: str, title_hint: str = "") -> Document | None:
 async def retrieve_documents(
     search_results: list[SearchResult],
     cache: dict[str, Document | None] | None = None,
+    max_documents: int | None = None,
 ) -> list[Document]:
-    """Extract one Document per unique URL.
+    """Extract one Document per unique URL, best-ranked first, capped at
+    `max_documents` (settings.max_documents_per_subject).
 
-    Two dedup passes fix redundant crawling that previously made retrieval
-    look "stuck" re-fetching the same task"""
+    Three things fixed here that previously made a single subject balloon
+    into far more crawling/tokens downstream than intended:
+    1. Within this call: different queries in the same plan frequently
+       return the same top result(s) - each occurrence used to be crawled
+       separately.
+    2. Across calls, via `cache` (share one dict across an entire run in
+       pipeline.py): the same URL can surface again for a different role/
+       subject search.
+    3. `max_documents`: max_search_results_per_query is a *per query* cap,
+       so N queries could still add up to N * max_search_results_per_query
+       raw hits (e.g. 8 queries x 10 results = up to 80) - all of which
+       used to get crawled and every one of which feeds evidence into the
+       synthesis prompt. Selecting only the best-ranked `max_documents`
+       unique URLs, across all queries combined, is what actually keeps
+       retrieval (and the eventual Groq request) concise.
+    """
     by_canonical: dict[str, SearchResult] = {}
     for r in search_results:
-        by_canonical.setdefault(_canonicalize_url(r.url), r)
+        canonical = _canonicalize_url(r.url)
+        existing = by_canonical.get(canonical)
+        if existing is None or r.rank < existing.rank:
+            by_canonical[canonical] = r  # keep the best rank seen for this URL
+
+    ranked = sorted(by_canonical.values(), key=lambda r: r.rank)
+    if max_documents is not None:
+        ranked = ranked[:max_documents]
 
     to_fetch: list[SearchResult] = []
     cached_docs: list[Document] = []
-    for canonical, r in by_canonical.items():
+    for r in ranked:
+        canonical = _canonicalize_url(r.url)
         if cache is not None and canonical in cache:
             hit = cache[canonical]
             if hit is not None:
