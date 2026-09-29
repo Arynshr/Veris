@@ -1,4 +1,5 @@
 """Ingestion: deterministic spaCy NER over the raw query"""
+
 from functools import lru_cache
 
 import spacy
@@ -22,7 +23,12 @@ def _load_spacy_model():
 def extract_entities(text: str) -> list[Entity]:
     doc = _load_spacy_model()(text)
     return [
-        Entity(text=ent.text, label=ent.label_, start_char=ent.start_char, end_char=ent.end_char)
+        Entity(
+            text=ent.text,
+            label=ent.label_,
+            start_char=ent.start_char,
+            end_char=ent.end_char,
+        )
         for ent in doc.ents
     ]
 
