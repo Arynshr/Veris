@@ -6,6 +6,7 @@ REGISTER -> MAP EVIDENCE -> VERIFY ] -> SYNTHESIZE (all subjects) -> OUTPUT
 
 import asyncio
 import shutil
+from collections import Counter
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +56,7 @@ class RunSummary:
     sources_retrieved: int
     evidence_collected: int
     claims_verified: int
+    claims_single_source: int
     claims_conflicted: int
     report_path: str
 
@@ -67,9 +69,21 @@ class RunSummary:
             f"Sources retrieved: {self.sources_retrieved}\n"
             f"Evidence collected: {self.evidence_collected}\n"
             f"Claims verified: {self.claims_verified}\n"
+            f"Claims single-source: {self.claims_single_source}\n"
             f"Claims conflicted: {self.claims_conflicted}\n"
             f"Report: {self.report_path}\n"
         )
+
+
+def _count_statuses(
+    verifications: list[VerificationResult],
+) -> tuple[int, int, int]:
+    counts = Counter(v.status for v in verifications)
+    return (
+        counts[VerificationStatus.VERIFIED],
+        counts[VerificationStatus.SINGLE_SOURCE],
+        counts[VerificationStatus.CONFLICTED],
+    )
 
 
 def _emit(
@@ -208,6 +222,7 @@ async def _run_subject_pipeline(
         registered,
         subject=name,
         entities=ingestion.entities,
+        settings=settings,
         research_mode=research_mode,
     )
     store.save_evidence(evidence_list, subject=name)
@@ -238,15 +253,15 @@ async def _run_subject_pipeline(
     collected_claims.extend(claims)
     collected_verifications.extend(verifications)
     collected_evidence.extend(evidence_list)
-    verified = sum(1 for v in verifications if v.status == VerificationStatus.VERIFIED)
-    conflicted = len(verifications) - verified
+    verified, single_source, conflicted = _count_statuses(verifications)
     yield _emit(
         store,
         PipelineStage.VERIFICATION,
         EventStatus.COMPLETED,
-        f"{verified} verified, {conflicted} conflicted",
+        f"{verified} verified, {single_source} single-source, {conflicted} conflicted",
         subject=name,
         verified=verified,
+        single_source=single_source,
         conflicted=conflicted,
     )
 
@@ -363,10 +378,9 @@ async def stream_research(
             )
             raise
 
-    total_verified = sum(
-        1 for v in all_verifications if v.status == VerificationStatus.VERIFIED
+    total_verified, total_single_source, total_conflicted = _count_statuses(
+        all_verifications
     )
-    total_conflicted = len(all_verifications) - total_verified
     total_documents = store.total_documents_registered
 
     yield _emit(
@@ -410,6 +424,7 @@ async def stream_research(
                 sources_retrieved=total_documents,
                 evidence_collected=len(all_evidence),
                 claims_verified=total_verified,
+                claims_single_source=total_single_source,
                 claims_conflicted=total_conflicted,
             )
         )
@@ -428,6 +443,7 @@ async def stream_research(
         sources_retrieved=total_documents,
         evidence_collected=len(all_evidence),
         claims_verified=total_verified,
+        claims_single_source=total_single_source,
         claims_conflicted=total_conflicted,
     )
 
@@ -463,6 +479,7 @@ async def run_research(
         sources_retrieved=final_data["sources_retrieved"],
         evidence_collected=final_data["evidence_collected"],
         claims_verified=final_data["claims_verified"],
+        claims_single_source=final_data["claims_single_source"],
         claims_conflicted=final_data["claims_conflicted"],
         report_path=final_data["report_path"],
     )

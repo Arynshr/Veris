@@ -1,6 +1,6 @@
 """
-Only VERIFIED claims are handed to the model;
-CONFLICTED claims are never presented as fact.
+Only VERIFIED and SINGLE_SOURCE claims are handed to the model, the latter tagged
+as uncorroborated; CONFLICTED claims are never presented as fact.
 GENERAL mode produces a plain cited research report;
 BACKGROUND_CHECK mode produces an adverse-media
 report grouped subject -> risk category, with an identity/screening disclaimer.
@@ -26,7 +26,9 @@ from veris.core.models import (
 _GENERAL_SYSTEM_PROMPT = """You are writing a cited research report on one or more subjects. \
 You MUST only use the verified findings and evidence provided below - never invent facts, \
 dates, or sources. Every substantive sentence must be followed by a citation marker like \
-[S1], [S2] referencing the numbered sources list. Structure the report with one heading per \
+[S1], [S2] referencing the numbered sources list. Findings tagged "(single source, \
+uncorroborated)" must be described as reported by one source only, never as established. \
+Structure the report with one heading per \
 subject (skip subject headings if there's only one); write a coherent narrative synthesis \
 under each, not just a bullet dump of the claims - group related points, note agreement or \
 disagreement between sources where evidence shows it. End with a "Sources" section listing \
@@ -35,7 +37,8 @@ every numbered source and its URL. Output clean Markdown."""
 _BACKGROUND_CHECK_SYSTEM_PROMPT = """You are writing a multi-subject adverse-media \
 background-check report. You MUST only use the verified findings and evidence provided \
 below - never invent facts, dates, or sources. Describe every finding as "reported by \
-<source>" or "according to <source>", never as an established fact, since this is a \
+<source>" or "according to <source>", never as an established fact (and findings tagged "(single source, \
+uncorroborated)" as reported by a single source only), since this is a \
 screening aid and not a legal or compliance determination. Structure the report with one \
 heading per subject; within each subject, group findings under: Legal & Litigation, \
 Regulatory & Sanctions, Criminal, Financial, Reputational & Other - omitting any heading \
@@ -51,6 +54,8 @@ _CATEGORY_HEADINGS: dict[AdverseCategory, str] = {
     AdverseCategory.FINANCIAL: "Financial",
     AdverseCategory.REPUTATIONAL: "Reputational & Other",
 }
+
+_SINGLE_SOURCE_TAG = "(single source, uncorroborated)"
 
 _SCREENING_DISCLAIMER = (
     "> **Screening aid only.** Findings below are drawn from public web sources and are "
@@ -93,22 +98,27 @@ def _grouped_by_subject_category(
     verifications: list[VerificationResult],
     evidence_list: list[Evidence],
 ) -> dict[str, list[tuple[Claim, Evidence]]]:
-    """subject -> [(claim, evidence)], sorted by evidence relevance_score descending."""
+    """subject -> [(claim, representative evidence)], sorted by evidence
+    relevance_score descending. Uncorroborated claims carry a visible tag."""
     evidence_by_id = {e.evidence_id: e for e in evidence_list}
     claim_by_id = {c.claim_id: c for c in claims}
-    verified_ids = {
-        v.claim_id for v in verifications if v.status == VerificationStatus.VERIFIED
+    reportable = {
+        v.claim_id: v.status
+        for v in verifications
+        if v.status != VerificationStatus.CONFLICTED
     }
 
     grouped: dict[str, list[tuple[Claim, Evidence]]] = defaultdict(list)
-    for claim_id in verified_ids:
+    for claim_id, status in reportable.items():
         claim = claim_by_id.get(claim_id)
-        if not claim:
+        ev = evidence_by_id.get(claim.evidence_ids[0]) if claim else None
+        if not claim or not ev:
             continue
-        for eid in claim.evidence_ids:
-            ev = evidence_by_id.get(eid)
-            if ev:
-                grouped[claim.subject].append((claim, ev))
+        if status == VerificationStatus.SINGLE_SOURCE:
+            claim = claim.model_copy(
+                update={"text": f"{claim.text} {_SINGLE_SOURCE_TAG}"}
+            )
+        grouped[claim.subject].append((claim, ev))
     for subject in grouped:
         grouped[subject].sort(key=lambda pair: pair[1].relevance_score, reverse=True)
     return grouped

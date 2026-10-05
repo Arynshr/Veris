@@ -8,11 +8,13 @@ CLI entrypoint (spec section 13).
     veris sources <run_id>
     veris verify <run_id> [--subject "Jane Doe"]
     veris events <run_id>
+    veris eval [--baseline eval/baseline.json]
 """
 
 import asyncio
 import json
 import logging
+from pathlib import Path
 
 import typer
 from pydantic import ValidationError
@@ -32,12 +34,19 @@ from veris.core.models import (
     SubjectType,
 )
 from veris.core.storage import RunPersistence
+from veris.evaluation import EvalReport, compare_reports, load_golden_cases, run_eval
 from veris.pipeline import stream_research
 
 app = typer.Typer(
     add_completion=False, help="Veris - evidence-grounded research assistant."
 )
 console = Console()
+
+_VERIFICATION_STYLE = {
+    "VERIFIED": "green",
+    "SINGLE_SOURCE": "yellow",
+    "CONFLICTED": "red",
+}
 
 _STATUS_STYLE = {
     EventStatus.STARTED: ("◐", "yellow"),
@@ -295,17 +304,64 @@ def verify(
     table.add_column("Status")
     table.add_column("Subject Match")
     table.add_column("Source Quality")
+    table.add_column("Domains")
     table.add_column("Reasons")
     for r in results:
-        style = "green" if r["status"] == "VERIFIED" else "red"
+        style = _VERIFICATION_STYLE[r["status"]]
         table.add_row(
             r["claim_id"],
             f"[{style}]{r['status']}[/{style}]",
             str(r["subject_match_score"]),
             str(r["source_quality_score"]),
+            str(r.get("independent_domains", "")),
             "; ".join(r.get("reasons", [])),
         )
     console.print(table)
+
+
+@app.command(name="eval")
+def evaluate(
+    golden_dir: Path = typer.Option(
+        Path("eval/golden"), "--golden-dir", help="Directory of golden case JSON files."
+    ),
+    output: Path = typer.Option(
+        Path("eval/metrics.json"), "--output", "-o", help="Where to write metrics JSON."
+    ),
+    baseline: Path = typer.Option(
+        None,
+        "--baseline",
+        help="Earlier metrics JSON; exit 1 if any headline metric regresses.",
+    ),
+) -> None:
+    """Score evidence mapping + verification on the golden set, fully offline."""
+    try:
+        report = run_eval(load_golden_cases(golden_dir), get_settings())
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
+
+    table = Table(title=f"Eval: {len(report.cases)} cases")
+    table.add_column("Metric")
+    table.add_column("Value")
+    for name, value in report.headline().items():
+        table.add_row(name, f"{value:.4f}")
+    table.add_row("findings.precision", f"{report.findings.precision:.4f}")
+    table.add_row("findings.recall", f"{report.findings.recall:.4f}")
+    console.print(table)
+    console.print(f"[dim]Metrics written to {output}[/dim]")
+
+    if baseline:
+        regressions = compare_reports(
+            report, EvalReport.model_validate_json(baseline.read_text(encoding="utf-8"))
+        )
+        if regressions:
+            console.print("[red]Regression vs baseline:[/red]")
+            for line in regressions:
+                console.print(f"  {line}")
+            raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":
