@@ -20,7 +20,12 @@ class ResearchMode(StrEnum):
 
 
 class VerificationStatus(StrEnum):
+    """VERIFIED: corroborated by independent domains or a top-tier source.
+    SINGLE_SOURCE: identity holds but support is uncorroborated.
+    CONFLICTED: identity mismatch or a contradiction; never presented as fact."""
+
     VERIFIED = "VERIFIED"
+    SINGLE_SOURCE = "SINGLE_SOURCE"
     CONFLICTED = "CONFLICTED"
 
 
@@ -182,6 +187,14 @@ class Evidence(BaseModel):
     document_id: str
     claim: str
     supporting_passage: str
+    span_start: int = Field(
+        description="Claim sentence offsets within Document.content."
+    )
+    span_end: int
+    subject_context: str | None = Field(
+        default=None,
+        description="Nearest sentence naming the subject when the passage doesn't.",
+    )
     source_metadata: SourceMetadata
     category: AdverseCategory = AdverseCategory.GENERAL
     relevance_score: float = Field(
@@ -207,6 +220,7 @@ class VerificationResult(BaseModel):
     )
     entity_match_score: float = Field(ge=0.0, le=1.0)
     source_quality_score: float = Field(ge=0.0, le=1.0)
+    independent_domains: int = Field(default=0, ge=0)
     reasons: list[str] = Field(default_factory=list)
 
 
@@ -221,4 +235,5 @@ class ResearchRun(BaseModel):
     sources_retrieved: int = 0
     evidence_collected: int = 0
     claims_verified: int = 0
+    claims_single_source: int = 0
     claims_conflicted: int = 0

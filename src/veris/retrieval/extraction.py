@@ -6,37 +6,17 @@ failures are logged and skipped, never crash the run.
 """
 
 import asyncio
-import hashlib
-from datetime import UTC, datetime
-from urllib.parse import urlsplit, urlunsplit
 
 from crawl4ai import AsyncWebCrawler
 
 from veris.core.config import get_logger
+from veris.core.documents import build_document, canonicalize_url
 from veris.core.models import Document, SearchResult
 
 logger = get_logger(__name__)
 
 
-def _canonicalize_url(url: str) -> str:
-    """Strip fragments/tracking params and normalize scheme/host for dedup."""
-    parts = urlsplit(url)
-    path = parts.path.rstrip("/") or "/"
-    return urlunsplit(
-        (parts.scheme.lower() or "https", parts.netloc.lower(), path, "", "")
-    )
-
-
-def _content_hash(content: str) -> str:
-    return hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
-
-
-def _document_id(canonical_url: str) -> str:
-    return hashlib.sha1(canonical_url.encode("utf-8")).hexdigest()[:16]
-
-
 async def _extract_document(url: str, title_hint: str = "") -> Document | None:
-    canonical = _canonicalize_url(url)
     try:
         async with AsyncWebCrawler() as crawler:
             result = await crawler.arun(url=url)
@@ -47,19 +27,10 @@ async def _extract_document(url: str, title_hint: str = "") -> Document | None:
     if not result or not result.success or not (result.markdown or "").strip():
         return None
 
-    content = result.markdown.strip()
-    return Document(
-        document_id=_document_id(canonical),
+    return build_document(
         url=url,
-        canonical_url=canonical,
-        title=(getattr(result, "metadata", {}) or {}).get("title")
-        or title_hint
-        or canonical,
-        content=content,
-        source=canonical.split("/")[2] if "//" in canonical else canonical,
-        retrieved_at=datetime.now(UTC),
-        published_at=None,
-        content_hash=_content_hash(content),
+        title=(getattr(result, "metadata", {}) or {}).get("title") or title_hint,
+        content=result.markdown,
     )
 
 
@@ -89,7 +60,7 @@ async def retrieve_documents(
     """
     by_canonical: dict[str, SearchResult] = {}
     for r in search_results:
-        canonical = _canonicalize_url(r.url)
+        canonical = canonicalize_url(r.url)
         existing = by_canonical.get(canonical)
         if existing is None or r.rank < existing.rank:
             by_canonical[canonical] = r  # keep the best rank seen for this URL
@@ -101,7 +72,7 @@ async def retrieve_documents(
     to_fetch: list[SearchResult] = []
     cached_docs: list[Document] = []
     for r in ranked:
-        canonical = _canonicalize_url(r.url)
+        canonical = canonicalize_url(r.url)
         if cache is not None and canonical in cache:
             hit = cache[canonical]
             if hit is not None:
@@ -116,7 +87,7 @@ async def retrieve_documents(
     fresh_docs: list[Document] = []
     for r, doc in zip(to_fetch, extracted):
         if cache is not None:
-            cache[_canonicalize_url(r.url)] = doc
+            cache[canonicalize_url(r.url)] = doc
         if doc is not None:
             fresh_docs.append(doc)
 

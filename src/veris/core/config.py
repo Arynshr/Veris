@@ -44,6 +44,16 @@ class Settings(BaseSettings):
     max_resolved_subjects: int = 8
     max_group_role_size: int = Field(default=8, ge=1)
 
+    source_tiers_path: Path = Path("config/source_tiers.yaml")
+    evidence_window_sentences: int = Field(default=1, ge=0, le=5)
+    evidence_mention_max_distance: int = Field(default=3, ge=0, le=20)
+    identity_anchor_labels: list[str] = ["ORG", "GPE", "FAC", "LOC", "NORP"]
+    claim_dedup_similarity: float = Field(default=0.8, ge=0.0, le=1.0)
+    min_independent_domains: int = Field(default=2, ge=1)
+    min_corroboration_quality: float = Field(default=0.5, ge=0.0, le=1.0)
+    verified_alone_max_tier: int = Field(default=1, ge=1)
+    min_entity_match_score: float = Field(default=0.25, ge=0.0, le=1.0)
+
     runs_dir: Path = Path("runs")
 
 
