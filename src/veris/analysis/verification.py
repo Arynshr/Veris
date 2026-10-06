@@ -34,7 +34,7 @@ class _EvidenceCheck:
     subject_score: float
     entity_score: float
     source: SourceClassification
-    indentity_ok: bool
+    identity_ok: bool
 
 
 def entity_match_score(text: str, entities: list[Entity]) -> float:
@@ -119,7 +119,7 @@ def run_verification(
                     subject_score=subject_score,
                     entity_score=entity_score,
                     source=policy.classify(evidence_by_id[eid].source_metadata.source),
-                    indentity_ok=subject_score >= settings.min_subject_name_overlap
+                    identity_ok=subject_score >= settings.min_subject_name_overlap
                     and (
                         not is_background_check
                         or not entities

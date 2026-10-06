@@ -35,25 +35,25 @@ _MIN_RELEVANCE_SCORE_GENERAL = 0.05
 _CATEGORY_KEYWORDS: dict[AdverseCategory, list[str]] = {
     AdverseCategory.LEGAL: [
         "lawsuit",
-        "sued",
+        r"sued\b",
         "litigation",
-        "court",
+        r"court\b",
         "plaintiff",
         "defendant",
     ],
     AdverseCategory.REGULATORY: [
         "sanction",
         "regulator",
-        "sec ",
-        "ftc",
+        r"sec\b",
+        r"ftc\b",
         "compliance violation",
-        "fine",
+        r"fined\b",
         "penalty",
     ],
     AdverseCategory.CRIMINAL: [
         "fraud",
         "indicted",
-        "charged",
+        r"charged\b",
         "arrest",
         "criminal",
         "convicted",
@@ -70,12 +70,21 @@ _CATEGORY_KEYWORDS: dict[AdverseCategory, list[str]] = {
         "scandal",
         "controversy",
         "allegation",
-        "accused",
+        r"accused\b",
         "backlash",
         "criticized",
     ],
 }
-_ALL_ADVERSE_KEYWORDS = [kw for kws in _CATEGORY_KEYWORDS.values() for kw in kws]
+_CATEGORY_PATTERNS = {
+    cat: re.compile(r"\b(?:" + "|".join(kws) + ")", re.IGNORECASE)
+    for cat, kws in _CATEGORY_KEYWORDS.items()
+}
+_ADVERSE_RE = re.compile(
+    "|".join(p.pattern for p in _CATEGORY_PATTERNS.values()), re.IGNORECASE
+)
+_ALL_ADVERSE_KEYWORDS = [
+    kw.replace("\\b", "") for kws in _CATEGORY_KEYWORDS.values() for kw in kws
+]
 
 
 @dataclass(frozen=True)
@@ -106,18 +115,14 @@ def _split_sentences(text: str) -> list[_Sentence]:
 
 
 def _categorize(sentence: str) -> AdverseCategory:
-    lowered = sentence.lower()
-    for category, keywords in _CATEGORY_KEYWORDS.items():
-        if any(kw in lowered for kw in keywords):
+    for category, pattern in _CATEGORY_PATTERNS.items():
+        if pattern.search(sentence):
             return category
     return AdverseCategory.GENERAL
 
 
-def _is_adverse_candidate(sentence: str, subject: str) -> bool:
-    lowered = sentence.lower()
-    return subject.lower() in lowered or any(
-        kw in lowered for kw in _ALL_ADVERSE_KEYWORDS
-    )
+def _is_adverse_candidate(sentence: str) -> bool:
+    return bool(_ADVERSE_RE.search(sentence))
 
 
 def _rank_by_tfidf(texts: list[str], query: str) -> list[tuple[int, float]]:
@@ -226,7 +231,7 @@ def run_evidence_mapping(
         ]
         if research_mode == ResearchMode.BACKGROUND_CHECK:
             anchors = [
-                i for i in anchors if _is_adverse_candidate(sentences[i].text, subject)
+                i for i in anchors if _is_adverse_candidate(sentences[i].text)
             ]
             ranked = _rank_by_tfidf([sentences[i].text for i in anchors], query)[
                 :_MAX_EVIDENCE_PER_DOCUMENT

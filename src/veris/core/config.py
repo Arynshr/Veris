@@ -9,6 +9,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 MAX_SEARCH_RESULTS_CEILING = 10
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 class Settings(BaseSettings):
@@ -44,7 +45,7 @@ class Settings(BaseSettings):
     max_resolved_subjects: int = 8
     max_group_role_size: int = Field(default=8, ge=1)
 
-    source_tiers_path: Path = Path("config/source_tiers.yaml")
+    source_tiers_path: Path = PROJECT_ROOT / "config" / "source_tiers.yaml"
     evidence_window_sentences: int = Field(default=1, ge=0, le=5)
     evidence_mention_max_distance: int = Field(default=3, ge=0, le=20)
     identity_anchor_labels: list[str] = ["ORG", "GPE", "FAC", "LOC", "NORP"]

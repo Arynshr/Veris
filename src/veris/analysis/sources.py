@@ -83,5 +83,5 @@ def registrable_domain(host: str) -> str:
     country-code second-level suffixes such as bbc.co.uk."""
     labels = host.lower().removeprefix("www.").split(".")
     if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in _SECOND_LEVEL_LABELS:
-        return ".".join(labels[-3:1])
+        return ".".join(labels[-3:])
     return ".".join(labels[-2:])

@@ -4,15 +4,9 @@ research-angle queries (overview, recent developments, analysis, counterpoints);
 BACKGROUND_CHECK mode generates adverse-media risk-category queries.
 """
 
-import asyncio
-import json
-
-from groq import Groq
-
 from veris.core.config import Settings, get_logger
 from veris.core.models import (
     AdverseCategory,
-    IngestionResult,
     ResearchMode,
     ResearchPlan,
     SearchQuery,
@@ -48,40 +42,6 @@ _ADVERSE_TEMPLATES: dict[AdverseCategory, list[str]] = {
         "{subject} allegations",
     ],
 }
-
-_GENERAL_PLAN_PROMPT = """You are planning research on a topic or named subject. Propose \
-additional targeted search queries that are NOT already covered by the "already planned" \
-list below - angles specific to this subject (sub-topics, related events, opposing \
-viewpoints, recent developments). Each query must:
-- mention the subject (or an unambiguous synonym) explicitly, so it can't drift onto an \
-unrelated entity
-- be a short, literal search-engine query (3-8 words), not a question or full sentence
-- not duplicate or trivially reword any query already in the "already planned" list
-
-Respond with JSON only (no prose, no markdown fences):
-{{
-  "queries": [{{"text": "<search query>", "priority": <1-5, 1=highest>, "rationale": "<why>"}}]
-}}
-Generate at most {max_queries} additional queries. If you cannot think of that many \
-genuinely new angles, return fewer - never pad with near-duplicates."""
-
-_ADVERSE_PLAN_PROMPT = """You are planning an adverse-media background check on a named \
-subject. Given the subject and any known aliases/affiliations, propose additional targeted \
-search queries that are NOT already covered by the "already planned" list below and that \
-would surface adverse news specific to this subject - e.g. their industry, role, known \
-associates, or past employers. Each query must:
-- mention the subject by name explicitly (never a role, title, or group term alone), so \
-results can't be misattributed to a different person or company holding the same role
-- be a short, literal search-engine query (3-8 words), not a question or full sentence
-- not duplicate or trivially reword any query already in the "already planned" list
-
-Respond with JSON only (no prose, no markdown fences):
-{{
-  "queries": [{{"text": "<search query>", "priority": <1-5, 1=highest>, "rationale": "<why>", "category": "<legal_litigation|regulatory_sanctions|criminal|financial|reputational>"}}]
-}}
-Generate at most {max_queries} additional queries. If you cannot think of that many \
-genuinely new angles, return fewer - never pad with near-duplicates."""
-
 
 def _template_plan(
     subject: str, research_mode: ResearchMode, max_queries: int
@@ -131,12 +91,7 @@ def _normalize(text: str) -> str:
 
 
 def _dedupe_queries(queries: list[SearchQuery]) -> list[SearchQuery]:
-    """Drop exact/near-duplicate query text, keeping the first (i.e.
-    highest-priority / template-before-LLM) occurrence. Previously template
-    queries and LLM-augmented queries were never cross-checked, so the LLM
-    - which wasn't told what had already been planned - would frequently
-    regenerate a query already covered by a template, and that duplicate
-    would be searched a second time for no new information."""
+    """Drop exact/near-duplicate query text, keeping the first occurrence."""
     seen: set[str] = set()
     deduped: list[SearchQuery] = []
     for q in queries:
@@ -148,95 +103,13 @@ def _dedupe_queries(queries: list[SearchQuery]) -> list[SearchQuery]:
     return deduped
 
 
-async def run_planning(
-    ingestion: IngestionResult,
+def run_planning(
     settings: Settings,
     subject: str,
     research_mode: ResearchMode = ResearchMode.GENERAL,
 ) -> ResearchPlan:
-    """Planning entrypoint: baseline mode-appropriate templates + optional LLM-augmented queries."""
     plan = _template_plan(subject, research_mode, settings.max_queries_per_plan)
-
-    if settings.groq_api_key:
-        already_planned = [q.text for q in plan.queries]
-        # Groq call is a blocking network request; run off the event loop so
-        # it doesn't stall other concurrent work in the pipeline (other
-        # subjects' searches, event streaming to the CLI) - a synchronous
-        # call here previously made the whole async pipeline appear to hang
-        # for the duration of the request.
-        llm_queries = await asyncio.to_thread(
-            _llm_augment, ingestion, settings, subject, research_mode, already_planned
-        )
-        plan.queries.extend(llm_queries)
-
     plan.queries = _dedupe_queries(plan.queries)
     plan.queries.sort(key=lambda q: q.priority)
     plan.queries = plan.queries[: settings.max_queries_per_plan]
     return plan
-
-
-def _llm_augment(
-    ingestion: IngestionResult,
-    settings: Settings,
-    subject: str,
-    research_mode: ResearchMode,
-    already_planned: list[str],
-) -> list[SearchQuery]:
-    aliases = (
-        ", ".join(
-            e.text for e in ingestion.entities if e.text.lower() != subject.lower()
-        )
-        or "none known"
-    )
-    planned_block = "\n".join(f"- {q}" for q in already_planned) or "(none yet)"
-    user_msg = (
-        f"Subject: {subject}\n"
-        f"Known related entities/aliases: {aliases}\n"
-        f"Context: {ingestion.original_prompt}\n\n"
-        f"Already planned (do not duplicate):\n{planned_block}"
-    )
-    prompt_template = (
-        _ADVERSE_PLAN_PROMPT
-        if research_mode == ResearchMode.BACKGROUND_CHECK
-        else _GENERAL_PLAN_PROMPT
-    )
-
-    try:
-        # Both client construction and the request itself can fail (bad key
-        # format, network error, timeout) - all of it belongs in the same
-        # try/except so any failure here falls back to template-only
-        # queries instead of raising out of what's meant to be a
-        # best-effort augmentation step.
-        client = Groq(api_key=settings.groq_api_key)
-        response = client.chat.completions.create(
-            model=settings.groq_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": prompt_template.format(
-                        max_queries=max(2, settings.max_queries_per_plan // 2)
-                    ),
-                },
-                {"role": "user", "content": user_msg},
-            ],
-            temperature=0.3,
-            response_format={"type": "json_object"},
-        )
-        data = json.loads(response.choices[0].message.content)
-        return [
-            SearchQuery(
-                query_id=f"llm_q{i}",
-                text=q["text"],
-                priority=q.get("priority", 2),
-                rationale=q.get("rationale", ""),
-            )
-            for i, q in enumerate(data.get("queries", []), start=1)
-            if q.get("text", "").strip()
-        ]
-    except Exception as exc:
-        logger.warning(
-            "LLM query augmentation failed for '%s', continuing with template queries only: %s",
-            subject,
-            exc,
-        )
-        return []
