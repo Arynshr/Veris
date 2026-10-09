@@ -1,0 +1,112 @@
+schema_version: 1
+
+categories:
+  criminal:
+    - 'arrest(?:ed|s)?'
+    - 'indict(?:ed|ment|ments)'
+    - 'charged (?:with|in)'
+    - 'criminal(?:ly)?'
+    - 'convict(?:ed|ion|ions)'
+    - 'prosecut(?:e|es|ed|ing|ion|or|ors)'
+    - 'felony|felonies'
+    - 'misdemeanou?rs?'
+    - 'sentenced'
+    - '(?:pleaded|pled) guilty'
+    - 'imprison(?:ed|ment)'
+  regulatory_sanctions:
+    - 'sanctions?|sanctioned'
+    - 'regulators?'
+    - 'securities and exchange commission'
+    - 'sec (?:charges|probe|investigation|fine|settlement|enforcement|complaint)'
+    - 'ftc'
+    - 'fined'
+    - 'a fine of'
+    - 'penalt(?:y|ies)'
+    - 'compliance violations?'
+    - 'cease[- ]and[- ]desist'
+    - 'consent (?:order|decree)'
+    - 'debarred|debarment'
+    - 'ofac'
+  litigation:
+    - 'lawsuits?'
+    - 'sued|suing'
+    - 'litigation'
+    - 'plaintiffs?|defendants?'
+    - 'class[- ]action'
+    - 'filed (?:a )?(?:suit|complaint)'
+    - '(?:district|federal|supreme|high|civil|appeals?) court'
+  financial_crime_fraud:
+    - 'fraud(?:ulent|ulently)?'
+    - 'embezzle(?:d|ment|s)?'
+    - 'money laundering|laundered'
+    - 'ponzi'
+    - 'insider trading'
+    - 'market manipulation'
+    - 'tax evasion'
+    - 'bankruptcy|insolvency'
+    - 'financial misconduct'
+  corruption_bribery:
+    - 'brib(?:e|es|ed|ery|ing)'
+    - 'kickbacks?'
+    - 'corrupt(?:ion)?'
+    - 'graft'
+    - 'foreign corrupt practices act|fcpa'
+  esg_labor_safety:
+    - '(?:child|forced) labou?r'
+    - 'sweatshops?'
+    - 'workplace (?:safety|fatalit(?:y|ies))'
+    - 'osha'
+    - 'environmental (?:violations?|damage|disaster)'
+    - 'pollution|oil spill'
+    - 'discriminat(?:ion|ory)'
+    - 'harassment'
+  reputational:
+    - 'scandals?'
+    - 'controvers(?:y|ies)'
+    - 'allegations?'
+    - 'accused'
+    - 'backlash'
+    - 'criticis?ed'
+    - 'misconduct'
+
+query_terms: [fraud, lawsuit, sanction, indicted, convicted, bribery, corruption, scandal, fine, penalty, allegation, misconduct]
+
+status_precedence: [dismissed_acquitted, convicted, settled, charged]
+
+status_cues:
+  dismissed_acquitted:
+    - 'acquit(?:ted|tal|s)'
+    - 'cleared (?:of|from|by)'
+    - '(?:charges?|case|lawsuit|suit|complaint|claims?|indictment)(?: \w+){0,3} (?:dismissed|dropped|thrown out|withdrawn)'
+    - '(?:dismissed|dropped|dismissing|dropping) (?:all |the )?(?:\w+ )?(?:charges?|case|lawsuit|suit|complaint|indictment)'
+    - 'found not guilty|verdict of not guilty'
+    - 'exonerat(?:ed|ion)'
+    - '(?:conviction|verdict|sentence)(?: was| were)? (?:overturned|quashed|vacated)'
+  convicted:
+    - 'convict(?:ed|ion|ions)'
+    - 'found guilty'
+    - '(?:pleaded|pled) guilty|guilty plea'
+    - 'sentenced'
+  settled:
+    - 'settle(?:d|ment|ments)'
+    - 'agreed to pay'
+    - 'consent (?:order|decree)'
+    - 'without admitting'
+  charged:
+    - 'charged'
+    - 'charges? (?:of|against|related)'
+    - 'indict(?:ed|ment)'
+    - 'arrested'
+    - 'sued'
+    - 'filed (?:a )?(?:suit|lawsuit|complaint)'
+
+negators: ["not", "never", "no", "without", "neither", "nor", "wasn't", "weren't", "hasn't", "haven't", "hadn't", "isn't", "aren't", "didn't"]
+negation_window_tokens: 3
+
+severity:
+  convicted:         {default: HIGH, reputational: MEDIUM}
+  charged:           {default: HIGH, regulatory_sanctions: MEDIUM, litigation: MEDIUM, esg_labor_safety: MEDIUM, reputational: LOW}
+  settled:           {default: MEDIUM, reputational: LOW}
+  alleged:           {default: MEDIUM, litigation: LOW, reputational: LOW}
+  dismissed_acquitted: {default: LOW}
+  unknown:           {default: LOW}

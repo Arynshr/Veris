@@ -1,7 +1,10 @@
 """Configuration and logging setup. Secrets always come from environment variables."""
 
+import hashlib
+import json
 import logging
 import sys
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 
@@ -40,12 +43,20 @@ class Settings(BaseSettings):
         "evidence, and always cite sources."
     )
 
-    adverse_lookback_days: int = 730
+    lookback_years: int = Field(default=2, ge=1)
+    as_of_date: date | None = Field(
+        default=None, description="Reference date for the lookback window (default: today)."
+    )
     min_subject_name_overlap: float = 0.6
     max_resolved_subjects: int = 8
     max_group_role_size: int = Field(default=8, ge=1)
 
     source_tiers_path: Path = PROJECT_ROOT / "config" / "source_tiers.yaml"
+    taxonomy_path: Path = PROJECT_ROOT / "config" / "taxonomy.yaml"
+    safety_path: Path = PROJECT_ROOT / "config" / "safety.yaml"
+    slot_min_chars: int = Field(default=40, ge=1)
+    slot_max_chars: int = Field(default=900, ge=1)
+    summary_fallback_bullets: int = Field(default=3, ge=1)
     evidence_window_sentences: int = Field(default=1, ge=0, le=5)
     evidence_mention_max_distance: int = Field(default=3, ge=0, le=20)
     identity_anchor_labels: list[str] = ["ORG", "GPE", "FAC", "LOC", "NORP"]
@@ -74,3 +85,14 @@ def configure_logging(level: int = logging.INFO) -> None:
 
 def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
+
+
+def config_hash(settings: Settings) -> str:
+    """Stable hash of non-secret settings plus the YAML policy files."""
+    payload = settings.model_dump(
+        mode="json", exclude={k for k in type(settings).model_fields if k.endswith("_api_key")}
+    )
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode())
+    for path in (settings.source_tiers_path, settings.taxonomy_path, settings.safety_path):
+        digest.update(Path(path).read_bytes())
+    return digest.hexdigest()[:16]

@@ -4,7 +4,7 @@ Kept in one module since these are small, tightly related data shapes — splitt
 them across files added navigation overhead without real separation of concerns.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
@@ -50,15 +50,26 @@ class SubjectMode(StrEnum):
     ROLE_GROUP = "role_group"
 
 
-class AdverseCategory(StrEnum):
-    """Risk categories used only in BACKGROUND_CHECK mode."""
+class LegalStatus(StrEnum):
+    ALLEGED = "alleged"
+    CHARGED = "charged"
+    CONVICTED = "convicted"
+    SETTLED = "settled"
+    DISMISSED_ACQUITTED = "dismissed_acquitted"
+    UNKNOWN = "unknown"
 
-    LEGAL = "legal_litigation"
-    REGULATORY = "regulatory_sanctions"
-    CRIMINAL = "criminal"
-    FINANCIAL = "financial"
-    REPUTATIONAL = "reputational"
-    GENERAL = "general"
+
+class Severity(StrEnum):
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
+
+class DateSource(StrEnum):
+    METADATA = "metadata"
+    TEXT = "text"
+    URL = "url"
+    NONE = "none"
 
 
 class PipelineStage(StrEnum):
@@ -196,18 +207,30 @@ class Evidence(BaseModel):
         description="Nearest sentence naming the subject when the passage doesn't.",
     )
     source_metadata: SourceMetadata
-    category: AdverseCategory = AdverseCategory.GENERAL
     relevance_score: float = Field(
         default=0.0,
         description="TF-IDF cosine similarity to the subject/context query.",
     )
+    flags: list[str] = Field(default_factory=list)
 
 
 class Claim(BaseModel):
+    schema_version: int = 2
     claim_id: str
     text: str
     subject: str
     evidence_ids: list[str] = Field(default_factory=list)
+    categories: list[str] = Field(default_factory=lambda: ["uncategorized"])
+    legal_status: LegalStatus = LegalStatus.UNKNOWN
+    severity: Severity = Severity.LOW
+    event_date: date | None = None
+    published_date: date | None = None
+    date_source: DateSource = DateSource.NONE
+    out_of_window: bool = False
+    undated: bool = False
+    flags: list[str] = Field(
+        default_factory=list, description="Set when every supporting evidence item is flagged."
+    )
 
 
 class VerificationResult(BaseModel):
@@ -222,6 +245,9 @@ class VerificationResult(BaseModel):
     source_quality_score: float = Field(ge=0.0, le=1.0)
     independent_domains: int = Field(default=0, ge=0)
     reasons: list[str] = Field(default_factory=list)
+    conflicts_with: list[str] = Field(
+        default_factory=list, description="Claim IDs on the opposing terminal-status side."
+    )
 
 
 class ResearchRun(BaseModel):
@@ -237,3 +263,10 @@ class ResearchRun(BaseModel):
     claims_verified: int = 0
     claims_single_source: int = 0
     claims_conflicted: int = 0
+    config_hash: str = ""
+
+
+class SynthesisSlot(BaseModel):
+    slot_id: str
+    text: str
+    claim_ids: list[str]

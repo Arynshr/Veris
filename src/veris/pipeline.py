@@ -130,9 +130,7 @@ async def _run_subject_pipeline(
         f"Planning queries for {name}",
         subject=name,
     )
-    plan = await run_planning(
-        ingestion, settings, subject=name, research_mode=research_mode
-    )
+    plan = run_planning(settings, subject=name, research_mode=research_mode)
     store.save_plan(plan, subject=name)
     yield _emit(
         store,

@@ -109,6 +109,9 @@ class RunPersistence:
     def save_evidence(self, evidence: list, subject: str) -> None:
         self._write_json(self._subject_dir(subject) / "evidence.json", evidence)
 
+    def save_claims(self, claims: list, subject: str) -> None:
+        self._write_json(self._subject_dir(subject) / "claims.json", claims)
+
     def save_verification(self, results: list, subject: str) -> None:
         self._write_json(self._subject_dir(subject) / "verification.json", results)
 

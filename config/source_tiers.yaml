@@ -1,0 +1,38 @@
+schema_version: 1
+
+# Quality score per tier. Lower tier number = more authoritative.
+tiers:
+  1: 1.0
+  2: 0.9
+  3: 0.6
+  4: 0.3
+
+# Applied to any domain that matches no rule below. Must not be tier 1.
+default:
+  tier: 3
+  type: news
+
+# First match wins. A rule matches a host equal to, or a subdomain of, an entry;
+# entries starting with "." match by suffix (TLDs).
+rules:
+  - match: [".gov", ".edu", ".int", ".mil", "courtlistener.com", "sec.gov", "justice.gov"]
+    tier: 1
+    type: primary
+  - match: ["reuters.com", "apnews.com"]
+    tier: 2
+    type: wire
+  - match: ["bbc.com", "bloomberg.com", "wsj.com", "ft.com", "nytimes.com", "theguardian.com"]
+    tier: 2
+    type: news
+  - match: ["nature.com", "science.org"]
+    tier: 2
+    type: primary
+  - match: ["prnewswire.com", "businesswire.com", "globenewswire.com"]
+    tier: 3
+    type: press_release
+  - match: ["blogspot.com", "wordpress.com", "medium.com", "substack.com"]
+    tier: 4
+    type: blog
+  - match: ["reddit.com", "quora.com", "4chan.org"]
+    tier: 4
+    type: forum
