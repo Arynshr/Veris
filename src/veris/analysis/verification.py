@@ -5,24 +5,32 @@ independent domains, not articles. Produces VERIFIED / SINGLE_SOURCE / CONFLICTE
 never a probability-of-truth score.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date, datetime
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
+from veris.analysis.classification import Classification, classify
 from veris.analysis.matching import subject_match_score
 from veris.analysis.sources import (
     SourceClassification,
     load_source_policy,
     registrable_domain,
 )
+from veris.analysis.taxonomy import UNCATEGORIZED, Taxonomy, load_taxonomy
+from veris.analysis.temporal import DateInfo, resolve_dates, window_start
 from veris.core.config import Settings
+from veris.analysis.safety import INSTRUCTION_LIKE
 from veris.core.ids import stable_id
 from veris.core.models import (
     Claim,
     Entity,
     Evidence,
+    LegalStatus,
     ResearchMode,
+    Severity,
     VerificationResult,
     VerificationStatus,
 )
@@ -46,7 +54,9 @@ def entity_match_score(text: str, entities: list[Entity]) -> float:
 
 
 def _cluster_evidence(
-    evidence_list: list[Evidence], threshold: float
+    evidence_list: list[Evidence],
+    threshold: float,
+    text_of: Callable[[Evidence], str] = lambda e: e.claim,
 ) -> list[list[Evidence]]:
     """Greedy single-pass clustering of near-duplicate claim sentences by TF-IDF
     cosine similarity, strongest evidence first so the representative is stable."""
@@ -55,7 +65,7 @@ def _cluster_evidence(
         return [[e] for e in ordered]
     try:
         matrix = TfidfVectorizer(stop_words="english").fit_transform(
-            [e.claim for e in ordered]
+            [text_of(e) for e in ordered]
         )
     except ValueError:
         return [[e] for e in ordered]
@@ -72,20 +82,127 @@ def _cluster_evidence(
     return [[ordered[i] for i in members] for members in clusters]
 
 
+@dataclass(frozen=True)
+class _Item:
+    evidence: Evidence
+    cls: Classification
+    dates: DateInfo
+
+
+_TERMINAL = (LegalStatus.CONVICTED, LegalStatus.DISMISSED_ACQUITTED)
+_NEUTRAL = Classification(
+    categories=[UNCATEGORIZED], legal_status=LegalStatus.UNKNOWN, severity=Severity.LOW
+)
+
+
+def _published_date(raw: str | None) -> date | None:
+    try:
+        return datetime.fromisoformat(raw).date() if raw else None
+    except ValueError:
+        return None
+
+
+def _gap(item: _Item, group: list[_Item]) -> int:
+    day = item.dates.event_date
+    days = [g.dates.event_date for g in group if g.dates.event_date]
+    return min((abs((day - d).days) for d in days), default=0) if day else 0
+
+
+def _split_terminal(items: list[_Item]) -> list[list[_Item]]:
+    """Opposing terminal statuses become separate sides; other items join the
+    side nearest in time (first side on ties/undated)."""
+    sides = [[i for i in items if i.cls.legal_status == s] for s in _TERMINAL]
+    if not all(sides):
+        return [items]
+    for item in items:
+        if item.cls.legal_status not in _TERMINAL:
+            min(sides, key=lambda g: _gap(item, g)).append(item)
+    return sides
+
+
+def _make_claim(
+    items: list[_Item],
+    subject: str,
+    taxonomy: Taxonomy,
+    settings: Settings,
+    as_of: date,
+    adverse: bool,
+) -> Claim:
+    latest = max(
+        items,
+        key=lambda i: (
+            i.dates.event_date or date.min,
+            taxonomy.status_rank(i.cls.legal_status),
+            i.evidence.evidence_id,
+        ),
+    )
+    categories = [
+        c for c in taxonomy.category_order if any(c in i.cls.categories for i in items)
+    ] or [UNCATEGORIZED]
+    status = latest.cls.legal_status
+    event = latest.dates.event_date
+    return Claim(
+        claim_id=f"claim_{stable_id(*sorted(i.evidence.evidence_id for i in items), length=10)}",
+        text=next((i for i in items if not i.evidence.flags), items[0]).evidence.claim,
+        subject=subject,
+        evidence_ids=[i.evidence.evidence_id for i in items],
+        categories=categories,
+        legal_status=status,
+        severity=taxonomy.severity_for(status, categories),
+        event_date=event,
+        published_date=latest.dates.published_date,
+        date_source=latest.dates.date_source,
+        undated=event is None,
+        flags=[INSTRUCTION_LIKE] if all(i.evidence.flags for i in items) else [],
+        out_of_window=adverse
+        and event is not None
+        and event < window_start(as_of, settings.lookback_years),
+    )
+
+
 def _build_claims(
-    evidence_list: list[Evidence], subject: str, dedup_similarity: float
-) -> list[Claim]:
-    """One claim per cluster of near-duplicate evidence (traceability per spec
-    section 9); the cluster representative supplies the claim text."""
-    return [
-        Claim(
-            claim_id=f"claim_{stable_id(*sorted(e.evidence_id for e in cluster), length=10)}",
-            text=cluster[0].claim,
-            subject=subject,
-            evidence_ids=[e.evidence_id for e in cluster],
-        )
-        for cluster in _cluster_evidence(evidence_list, dedup_similarity)
-    ]
+    evidence_list: list[Evidence],
+    subject: str,
+    taxonomy: Taxonomy,
+    settings: Settings,
+    as_of: date,
+    adverse: bool,
+) -> tuple[list[Claim], dict[str, list[str]]]:
+    """One claim per dedup cluster (traceability per spec section 9). Status
+    resolves to the latest-dated evidence; a cluster whose terminal statuses
+    disagree splits into one claim per side, linked via the conflicts map."""
+    claims: list[Claim] = []
+    conflicts: dict[str, list[str]] = {}
+    text_of = (lambda e: taxonomy.strip_cues(e.claim)) if adverse else (lambda e: e.claim)
+    for cluster in _cluster_evidence(
+        evidence_list, settings.claim_dedup_similarity, text_of
+    ):
+        items = [
+            _Item(
+                e,
+                classify(e.supporting_passage, taxonomy, claim=e.claim)
+                if adverse
+                else _NEUTRAL,
+                resolve_dates(
+                    e.supporting_passage,
+                    e.source_metadata.url,
+                    _published_date(e.source_metadata.published_at),
+                    as_of,
+                ),
+            )
+            for e in cluster
+        ]
+        built = [
+            _make_claim(g, subject, taxonomy, settings, as_of, adverse)
+            for g in (_split_terminal(items) if adverse else [items])
+        ]
+        if len(built) > 1:
+            for claim in built:
+                conflicts[claim.claim_id] = [
+                    o.claim_id for o in built if o.claim_id != claim.claim_id
+                ]
+        claims.extend(built)
+    return claims, conflicts
 
 
 def run_verification(
@@ -96,9 +213,17 @@ def run_verification(
     research_mode: ResearchMode = ResearchMode.GENERAL,
 ) -> tuple[list[Claim], list[VerificationResult]]:
     policy = load_source_policy(settings.source_tiers_path)
-    claims = _build_claims(evidence_list, subject, settings.claim_dedup_similarity)
-    evidence_by_id = {e.evidence_id: e for e in evidence_list}
+    taxonomy = load_taxonomy(settings.taxonomy_path)
     is_background_check = research_mode == ResearchMode.BACKGROUND_CHECK
+    claims, conflicts = _build_claims(
+        evidence_list,
+        subject,
+        taxonomy,
+        settings,
+        settings.as_of_date or date.today(),
+        is_background_check,
+    )
+    evidence_by_id = {e.evidence_id: e for e in evidence_list}
     results: list[VerificationResult] = []
 
     off_topic_reason = (
@@ -156,6 +281,9 @@ def run_verification(
             reasons.append(
                 "not corroborated by an independent domain or top-tier source"
             )
+        if claim.claim_id in conflicts:
+            status = VerificationStatus.CONFLICTED
+            reasons.append("terminal legal statuses disagree (convicted vs dismissed_acquitted)")
         scored = matching or checks
         results.append(
             VerificationResult(
@@ -164,10 +292,11 @@ def run_verification(
                 subject_match_score=round(max(c.subject_score for c in scored), 2),
                 entity_match_score=round(max(c.entity_score for c in scored), 2),
                 source_quality_score=round(
-                    max(c.source_quality_score for c in scored), 2
+                    max(c.source.quality_score for c in scored), 2
                 ),
                 independent_domains=len(corroborating_domains),
                 reasons=reasons,
+                conflicts_with=conflicts.get(claim.claim_id, []),
             )
         )
     return claims, results

@@ -14,10 +14,11 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from veris.analysis.matching import subject_match_score
+from veris.analysis.taxonomy import load_taxonomy
+from veris.analysis.safety import INSTRUCTION_LIKE, load_safety
 from veris.core.config import Settings, get_logger
 from veris.core.ids import stable_id
 from veris.core.models import (
-    AdverseCategory,
     Document,
     Entity,
     Evidence,
@@ -31,61 +32,6 @@ _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 _MIN_SENTENCE_LEN = 40
 _MAX_EVIDENCE_PER_DOCUMENT = 5
 _MIN_RELEVANCE_SCORE_GENERAL = 0.05
-
-_CATEGORY_KEYWORDS: dict[AdverseCategory, list[str]] = {
-    AdverseCategory.LEGAL: [
-        "lawsuit",
-        r"sued\b",
-        "litigation",
-        r"court\b",
-        "plaintiff",
-        "defendant",
-    ],
-    AdverseCategory.REGULATORY: [
-        "sanction",
-        "regulator",
-        r"sec\b",
-        r"ftc\b",
-        "compliance violation",
-        r"fined\b",
-        "penalty",
-    ],
-    AdverseCategory.CRIMINAL: [
-        "fraud",
-        "indicted",
-        r"charged\b",
-        "arrest",
-        "criminal",
-        "convicted",
-        "prosecut",
-    ],
-    AdverseCategory.FINANCIAL: [
-        "bankruptcy",
-        "insolvency",
-        "embezzle",
-        "money laundering",
-        "financial misconduct",
-    ],
-    AdverseCategory.REPUTATIONAL: [
-        "scandal",
-        "controversy",
-        "allegation",
-        r"accused\b",
-        "backlash",
-        "criticized",
-    ],
-}
-_CATEGORY_PATTERNS = {
-    cat: re.compile(r"\b(?:" + "|".join(kws) + ")", re.IGNORECASE)
-    for cat, kws in _CATEGORY_KEYWORDS.items()
-}
-_ADVERSE_RE = re.compile(
-    "|".join(p.pattern for p in _CATEGORY_PATTERNS.values()), re.IGNORECASE
-)
-_ALL_ADVERSE_KEYWORDS = [
-    kw.replace("\\b", "") for kws in _CATEGORY_KEYWORDS.values() for kw in kws
-]
-
 
 @dataclass(frozen=True)
 class _Sentence:
@@ -112,17 +58,6 @@ def _split_sentences(text: str) -> list[_Sentence]:
             offset = begin + len(chunk) - len(chunk.lstrip())
             sentences.append(_Sentence(stripped, offset, offset + len(stripped)))
     return sentences
-
-
-def _categorize(sentence: str) -> AdverseCategory:
-    for category, pattern in _CATEGORY_PATTERNS.items():
-        if pattern.search(sentence):
-            return category
-    return AdverseCategory.GENERAL
-
-
-def _is_adverse_candidate(sentence: str) -> bool:
-    return bool(_ADVERSE_RE.search(sentence))
 
 
 def _rank_by_tfidf(texts: list[str], query: str) -> list[tuple[int, float]]:
@@ -210,10 +145,12 @@ def run_evidence_mapping(
     settings: Settings,
     research_mode: ResearchMode = ResearchMode.GENERAL,
 ) -> list[Evidence]:
+    taxonomy = load_taxonomy(settings.taxonomy_path)
+    safety = load_safety(settings.safety_path)
     context_terms = [e.text for e in entities if e.text]
 
     if research_mode == ResearchMode.BACKGROUND_CHECK:
-        query = " ".join([subject, *context_terms, *_ALL_ADVERSE_KEYWORDS])
+        query = " ".join([subject, *context_terms, *taxonomy.query_terms])
     else:
         query = " ".join([subject, *context_terms])
 
@@ -231,7 +168,7 @@ def run_evidence_mapping(
         ]
         if research_mode == ResearchMode.BACKGROUND_CHECK:
             anchors = [
-                i for i in anchors if _is_adverse_candidate(sentences[i].text)
+                i for i in anchors if taxonomy.match_categories(sentences[i].text)
             ]
             ranked = _rank_by_tfidf([sentences[i].text for i in anchors], query)[
                 :_MAX_EVIDENCE_PER_DOCUMENT
@@ -250,11 +187,6 @@ def run_evidence_mapping(
             sentence = sentences[anchor]
             low, high = bounds = _window_bounds(sentences, anchor, settings)
             passage = document.content[sentences[low].start : sentences[high].end]
-            category = (
-                _categorize(sentence.text)
-                if research_mode == ResearchMode.BACKGROUND_CHECK
-                else AdverseCategory.GENERAL
-            )
             evidence_list.append(
                 Evidence(
                     evidence_id=stable_id(
@@ -263,6 +195,7 @@ def run_evidence_mapping(
                     document_id=document.document_id,
                     claim=sentence.text,
                     supporting_passage=passage,
+                    flags=[INSTRUCTION_LIKE] if safety.matches(passage) else [],
                     subject_context=None
                     if subject_match_score(passage, subject)
                     >= settings.min_subject_name_overlap
@@ -271,7 +204,6 @@ def run_evidence_mapping(
                     ),
                     span_start=sentence.start,
                     span_end=sentence.end,
-                    category=category,
                     relevance_score=round(float(score), 3),
                     source_metadata=SourceMetadata(
                         url=document.url,
