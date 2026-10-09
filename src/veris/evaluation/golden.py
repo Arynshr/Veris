@@ -4,14 +4,22 @@ entities, so evaluation needs no network, provider, or spaCy model."""
 from datetime import datetime
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from veris.core.models import (
-    AdverseCategory,
     Entity,
+    LegalStatus,
     ResearchMode,
+    Severity,
     VerificationStatus,
 )
+
+
+_LEGACY_CATEGORIES = {
+    "legal_litigation": "litigation",
+    "financial": "financial_crime_fraud",
+    "general": "uncategorized",
+}
 
 
 class GoldenEntity(BaseModel):
@@ -31,11 +39,23 @@ class ExpectedFinding(BaseModel):
     match_text: str = Field(
         description="Case-insensitive substring identifying the finding's claim sentence."
     )
-    category: AdverseCategory
+    categories: list[str]
     verification: VerificationStatus
-    legal_status: str | None = Field(
-        default=None, description="Recorded for Phase 2; not scored yet."
-    )
+    legal_status: LegalStatus | None = None
+    severity: Severity | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize(cls, data):
+        """Accept legacy single `category` and legacy category names."""
+        if isinstance(data, dict):
+            data = dict(data)
+            if "category" in data:
+                data.setdefault("categories", [data.pop("category")])
+            data["categories"] = [
+                _LEGACY_CATEGORIES.get(c, c) for c in data.get("categories", [])
+            ]
+        return data
 
 
 class GoldenCase(BaseModel):

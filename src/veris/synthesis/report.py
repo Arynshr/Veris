@@ -4,17 +4,17 @@ as uncorroborated; CONFLICTED claims are never presented as fact.
 GENERAL mode produces a plain cited research report;
 BACKGROUND_CHECK mode produces an adverse-media
 report grouped subject -> risk category, with an identity/screening disclaimer.
-Deterministic non-LLM fallback in both modes so the pipeline never hard-fails.
+Body text is rendered from data; the single LLM output is the validated summary slot.
 """
 
 import asyncio
 from collections import defaultdict
 
-from groq import Groq
-
 from veris.core.config import Settings
+from veris.synthesis.slots import SlotLLM, groq_slot_llm
+from veris.synthesis.summary import SUMMARY_SLOT_ID, build_summary_slots
 from veris.core.models import (
-    AdverseCategory,
+    SynthesisSlot,
     Claim,
     Evidence,
     ResearchMode,
@@ -23,37 +23,16 @@ from veris.core.models import (
     VerificationStatus,
 )
 
-_GENERAL_SYSTEM_PROMPT = """You are writing a cited research report on one or more subjects. \
-You MUST only use the verified findings and evidence provided below - never invent facts, \
-dates, or sources. Every substantive sentence must be followed by a citation marker like \
-[S1], [S2] referencing the numbered sources list. Findings tagged "(single source, \
-uncorroborated)" must be described as reported by one source only, never as established. \
-Structure the report with one heading per \
-subject (skip subject headings if there's only one); write a coherent narrative synthesis \
-under each, not just a bullet dump of the claims - group related points, note agreement or \
-disagreement between sources where evidence shows it. End with a "Sources" section listing \
-every numbered source and its URL. Output clean Markdown."""
-
-_BACKGROUND_CHECK_SYSTEM_PROMPT = """You are writing a multi-subject adverse-media \
-background-check report. You MUST only use the verified findings and evidence provided \
-below - never invent facts, dates, or sources. Describe every finding as "reported by \
-<source>" or "according to <source>", never as an established fact (and findings tagged "(single source, \
-uncorroborated)" as reported by a single source only), since this is a \
-screening aid and not a legal or compliance determination. Structure the report with one \
-heading per subject; within each subject, group findings under: Legal & Litigation, \
-Regulatory & Sanctions, Criminal, Financial, Reputational & Other - omitting any heading \
-with no findings for that subject, and omitting any subject with no findings entirely (just \
-note "no adverse findings" for them). Every substantive sentence must be followed by a \
-citation marker like [S1], [S2] referencing the numbered sources list. End with a "Sources" \
-section listing every numbered source and its URL. Output clean Markdown."""
-
-_CATEGORY_HEADINGS: dict[AdverseCategory, str] = {
-    AdverseCategory.LEGAL: "Legal & Litigation",
-    AdverseCategory.REGULATORY: "Regulatory & Sanctions",
-    AdverseCategory.CRIMINAL: "Criminal",
-    AdverseCategory.FINANCIAL: "Financial",
-    AdverseCategory.REPUTATIONAL: "Reputational & Other",
+_CATEGORY_HEADINGS: dict[str, str] = {
+    "criminal": "Criminal",
+    "regulatory_sanctions": "Regulatory & Sanctions",
+    "litigation": "Legal & Litigation",
+    "financial_crime_fraud": "Financial Crime & Fraud",
+    "corruption_bribery": "Corruption & Bribery",
+    "esg_labor_safety": "ESG, Labor & Safety",
+    "reputational": "Reputational & Other",
 }
+_UNDATED_TAG = "(undated)"
 
 _SINGLE_SOURCE_TAG = "(single source, uncorroborated)"
 
@@ -63,17 +42,6 @@ _SCREENING_DISCLAIMER = (
     "can produce false matches - confirm identity details (role, location, employer) "
     "before relying on any finding. This is not a legal, credit, or compliance determination."
 )
-
-# Prompt-only truncation (persisted evidence.json always keeps the full
-# text - this only shortens what gets sent to Groq). A single unbounded
-# claim sentence is rare but does happen with dense source text, and one
-# long outlier is enough to tip a request over the tokens-per-minute limit.
-_MAX_CLAIM_CHARS_IN_PROMPT = 260
-
-
-def _truncate(text: str, limit: int = _MAX_CLAIM_CHARS_IN_PROMPT) -> str:
-    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
-
 
 def _resolution_summary(subjects: list[ResolvedSubject]) -> str:
     if len(subjects) == 1 and subjects[0].resolution_confidence >= 0.99:
@@ -111,9 +79,18 @@ def _grouped_by_subject_category(
     grouped: dict[str, list[tuple[Claim, Evidence]]] = defaultdict(list)
     for claim_id, status in reportable.items():
         claim = claim_by_id.get(claim_id)
-        ev = evidence_by_id.get(claim.evidence_ids[0]) if claim else None
-        if not claim or not ev:
+        ev = next(
+            (
+                evidence_by_id[i]
+                for i in (claim.evidence_ids if claim else [])
+                if i in evidence_by_id and not evidence_by_id[i].flags
+            ),
+            None,
+        )
+        if not claim or not ev or claim.out_of_window or claim.flags:
             continue
+        if claim.undated:
+            claim = claim.model_copy(update={"text": f"{claim.text} {_UNDATED_TAG}"})
         if status == VerificationStatus.SINGLE_SOURCE:
             claim = claim.model_copy(
                 update={"text": f"{claim.text} {_SINGLE_SOURCE_TAG}"}
@@ -135,13 +112,17 @@ def _build_sources_block(evidence_items: list[Evidence]) -> str:
     return "\n".join(lines)
 
 
-def _fallback_general_report(
-    subjects: list[ResolvedSubject], grouped: dict[str, list[tuple[Claim, Evidence]]]
+def _render_general_report(
+    subjects: list[ResolvedSubject],
+    grouped: dict[str, list[tuple[Claim, Evidence]]],
+    summary_md: str,
 ) -> str:
     lines = ["# Research Report", ""]
     resolution = _resolution_summary(subjects)
     if resolution:
         lines.append(resolution)
+    if summary_md:
+        lines.append(summary_md)
     all_evidence: list[Evidence] = []
     for subject in subjects:
         items = grouped.get(subject.name, [])
@@ -161,8 +142,10 @@ def _fallback_general_report(
     return "\n".join(lines)
 
 
-def _fallback_background_check_report(
-    subjects: list[ResolvedSubject], grouped: dict[str, list[tuple[Claim, Evidence]]]
+def _render_background_check_report(
+    subjects: list[ResolvedSubject],
+    grouped: dict[str, list[tuple[Claim, Evidence]]],
+    summary_md: str,
 ) -> str:
     lines = [
         "# Background Check Report",
@@ -170,6 +153,7 @@ def _fallback_background_check_report(
         _SCREENING_DISCLAIMER,
         "",
         _resolution_summary(subjects),
+        summary_md,
     ]
     all_evidence: list[Evidence] = []
     for subject in subjects:
@@ -180,11 +164,10 @@ def _fallback_background_check_report(
                 "_No adverse findings passed verification for this subject._\n"
             )
             continue
-        by_category: dict[AdverseCategory, list[tuple[Claim, Evidence]]] = defaultdict(
-            list
-        )
+        by_category: dict[str, list[tuple[Claim, Evidence]]] = defaultdict(list)
         for claim, ev in items:
-            by_category[ev.category].append((claim, ev))
+            for cat in claim.categories:
+                by_category[cat].append((claim, ev))
         for category, heading in _CATEGORY_HEADINGS.items():
             cat_items = by_category.get(category, [])
             if not cat_items:
@@ -201,6 +184,18 @@ def _fallback_background_check_report(
     return "\n".join(lines)
 
 
+def _render_summary(slots: list[SynthesisSlot]) -> str:
+    if not slots:
+        return ""
+    lines = ["## Executive Summary", ""]
+    for slot in slots:
+        cite = f"(claims: {', '.join(slot.claim_ids)})"
+        bullet = "" if slot.slot_id == SUMMARY_SLOT_ID else "- "
+        lines.append(f"{bullet}{slot.text} {cite}")
+    lines.append("")
+    return "\n".join(lines)
+
+
 async def run_synthesis(
     subjects: list[ResolvedSubject],
     claims: list[Claim],
@@ -208,102 +203,21 @@ async def run_synthesis(
     evidence_list: list[Evidence],
     settings: Settings,
     research_mode: ResearchMode = ResearchMode.GENERAL,
+    llm: SlotLLM | None = None,
 ) -> str:
-    """Synthesis entrypoint. The actual Groq call is synchronous/blocking and
-    is offloaded to a thread (see _run_synthesis_llm) so it doesn't stall the
-    async pipeline - consistent with the same fix in understanding.py and
-    planning.py."""
-    return await asyncio.to_thread(
-        _run_synthesis_sync,
-        subjects,
-        claims,
-        verifications,
-        evidence_list,
-        settings,
-        research_mode,
-    )
+    """Body is rendered from data; the only model output is the validated summary slot."""
+    llm = llm or groq_slot_llm(settings)
 
-
-def _run_synthesis_sync(
-    subjects: list[ResolvedSubject],
-    claims: list[Claim],
-    verifications: list[VerificationResult],
-    evidence_list: list[Evidence],
-    settings: Settings,
-    research_mode: ResearchMode = ResearchMode.GENERAL,
-) -> str:
-    grouped = _grouped_by_subject_category(claims, verifications, evidence_list)
-    is_background_check = research_mode == ResearchMode.BACKGROUND_CHECK
-
-    if not settings.groq_api_key:
-        return (
-            _fallback_background_check_report(subjects, grouped)
-            if is_background_check
-            else _fallback_general_report(subjects, grouped)
+    def build() -> str:
+        grouped = _grouped_by_subject_category(claims, verifications, evidence_list)
+        summary_md = _render_summary(
+            build_summary_slots(claims, verifications, evidence_list, settings, llm)
         )
-
-    all_evidence = [ev for items in grouped.values() for _, ev in items]
-    if not all_evidence:
-        title = (
-            "# Background Check Report" if is_background_check else "# Research Report"
+        render = (
+            _render_background_check_report
+            if research_mode == ResearchMode.BACKGROUND_CHECK
+            else _render_general_report
         )
-        no_findings = (
-            "No adverse findings passed verification for any subject. Either no adverse "
-            "coverage was found, or candidate matches could not be confidently attributed."
-            if is_background_check
-            else "No claims passed verification for any subject. Consider broadening the query "
-            "or adding search providers."
-        )
-        disclaimer = f"\n\n{_SCREENING_DISCLAIMER}" if is_background_check else ""
-        return f"{title}{disclaimer}\n\n{_resolution_summary(subjects)}{no_findings}\n"
+        return render(subjects, grouped, summary_md)
 
-    # Cap per-subject items (already sorted by relevance_score descending in
-    # _grouped_by_subject_category) and truncate each claim's prompt text -
-    # this is what actually keeps a single Groq request under the model's
-    # tokens-per-minute limit, independent of how many documents/subjects
-    # fed into evidence mapping upstream. `all_evidence`/`sources_block` are
-    # rebuilt from the *capped* items so the numbered source list matches
-    # exactly what's cited in the prompt.
-    capped_grouped = {
-        subject_name: items[: settings.max_synthesis_evidence_per_subject]
-        for subject_name, items in grouped.items()
-    }
-    all_evidence = [ev for items in capped_grouped.values() for _, ev in items]
-
-    sources_block = _build_sources_block(all_evidence)
-    findings_lines = []
-    for subject in subjects:
-        items = capped_grouped.get(subject.name, [])
-        findings_lines.append(f"## {subject.name}")
-        if not items:
-            findings_lines.append("(no verified findings)")
-            continue
-        for claim, ev in items:
-            findings_lines.append(
-                f"- {_truncate(claim.text)} (source: {ev.source_metadata.url})"
-            )
-    findings_block = "\n".join(findings_lines)
-
-    client = Groq(api_key=settings.groq_api_key)
-    system_prompt = (
-        _BACKGROUND_CHECK_SYSTEM_PROMPT
-        if is_background_check
-        else _GENERAL_SYSTEM_PROMPT
-    )
-    user_msg = (
-        f"Subjects: {', '.join(s.name for s in subjects)}\n\n"
-        f"Verified findings by subject:\n{findings_block}\n\n"
-        f"Numbered sources:\n{sources_block}\n\n"
-        "Write the Markdown report now."
-    )
-    response = client.chat.completions.create(
-        model=settings.groq_model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_msg},
-        ],
-        temperature=0.2,
-    )
-    body = response.choices[0].message.content
-    resolution = _resolution_summary(subjects)
-    return f"{resolution}\n{body}" if resolution else body
+    return await asyncio.to_thread(build)

@@ -178,7 +178,7 @@ def build_provider_chain(settings: Settings) -> list[SearchProvider]:
             {
                 "api_key": settings.tavily_api_key,
                 "max_retries": settings.max_retries,
-                "lookback_days": settings.adverse_lookback_days,
+                "lookback_days": settings.lookback_years * 365,
             },
         ),
         (
@@ -264,5 +264,8 @@ async def search_with_fallback(
         )
 
     if cache is not None:
+        if key is None:
+            raise ValueError("Key is required when caching is enabled")
         cache[key] = results
+    
     return results

@@ -7,17 +7,18 @@ from dataclasses import dataclass, field
 from pydantic import BaseModel
 
 from veris.analysis import run_evidence_mapping, run_verification
+from veris.analysis.taxonomy import UNCATEGORIZED
 from veris.core.config import Settings
 from veris.core.documents import build_document
 from veris.core.models import (
-    AdverseCategory,
+    Claim,
     Evidence,
     ResearchMode,
     VerificationStatus,
 )
 from veris.evaluation.golden import ExpectedFinding, GoldenCase
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class PRF(BaseModel):
@@ -42,16 +43,22 @@ class EvalReport(BaseModel):
     categories: dict[str, PRF]
     verification_states: dict[str, PRF]
     state_accuracy: float
+    legal_status_accuracy: float | None = None
+    severity_accuracy: float | None = None
 
     def headline(self) -> dict[str, float]:
         """Metrics gated by compare_reports. F1 (not raw precision/recall) so a
         deliberate precision/recall trade-off is judged on balance; precision and
         recall stay in the report for inspection."""
-        return {
+        metrics = {
             "findings.f1": self.findings.f1,
             "category.f1": _micro(self.categories.values()).f1,
             "state_accuracy": self.state_accuracy,
         }
+        for name in ("legal_status_accuracy", "severity_accuracy"):
+            if (value := getattr(self, name)) is not None:
+                metrics[name] = value
+        return metrics
 
 
 def _prf(tp: int, fp: int, fn: int) -> PRF:
@@ -82,10 +89,10 @@ def _matches(evidence: Evidence, expected: ExpectedFinding) -> bool:
     )
 
 
-def _is_finding(evidence: Evidence, research_mode: ResearchMode) -> bool:
+def _is_finding(claim: Claim, research_mode: ResearchMode) -> bool:
     return (
         research_mode != ResearchMode.BACKGROUND_CHECK
-        or evidence.category != AdverseCategory.GENERAL
+        or claim.categories != [UNCATEGORIZED]
     )
 
 
@@ -106,6 +113,8 @@ class _CaseScores:
     cat_fp: Counter = field(default_factory=Counter)
     cat_fn: Counter = field(default_factory=Counter)
     state_pairs: list[tuple[str, str | None]] = field(default_factory=list)
+    status_pairs: list[tuple[str, str | None]] = field(default_factory=list)
+    severity_pairs: list[tuple[str, str | None]] = field(default_factory=list)
 
 
 def _score_case(case: GoldenCase, settings: Settings) -> _CaseScores:
@@ -129,6 +138,7 @@ def _score_case(case: GoldenCase, settings: Settings) -> _CaseScores:
         research_mode=case.research_mode,
     )
     state_of = _evidence_states(claims, verifications)
+    claim_of = {eid: c for c in claims for eid in c.evidence_ids}
 
     reportable_expected = [
         f
@@ -138,7 +148,8 @@ def _score_case(case: GoldenCase, settings: Settings) -> _CaseScores:
     predicted = [
         e
         for e in evidence
-        if _is_finding(e, case.research_mode)
+        if e.evidence_id in claim_of
+        and _is_finding(claim_of[e.evidence_id], case.research_mode)
         and state_of.get(e.evidence_id) not in (None, VerificationStatus.CONFLICTED)
     ]
 
@@ -158,13 +169,31 @@ def _score_case(case: GoldenCase, settings: Settings) -> _CaseScores:
         result=CaseResult(case_id=case.case_id, findings=findings, state_accuracy=1.0)
     )
     for f in reportable_expected:
-        hit = any(_matches(e, f) and e.category == f.category for e in predicted)
-        (scores.cat_tp if hit else scores.cat_fn)[f.category.value] += 1
+        hits = {
+            c
+            for e in predicted
+            if _matches(e, f)
+            for c in claim_of[e.evidence_id].categories
+        }
+        for cat in f.categories:
+            (scores.cat_tp if cat in hits else scores.cat_fn)[cat] += 1
     for e in predicted:
-        if not any(
-            _matches(e, f) and e.category == f.category for f in reportable_expected
-        ):
-            scores.cat_fp[e.category.value] += 1
+        for cat in claim_of[e.evidence_id].categories:
+            if not any(
+                _matches(e, f) and cat in f.categories for f in reportable_expected
+            ):
+                scores.cat_fp[cat] += 1
+    for f in reportable_expected:
+        hit = next((e for e in predicted if _matches(e, f)), None)
+        claim = claim_of[hit.evidence_id] if hit else None
+        if f.legal_status:
+            scores.status_pairs.append(
+                (f.legal_status.value, claim.legal_status.value if claim else None)
+            )
+        if f.severity:
+            scores.severity_pairs.append(
+                (f.severity.value, claim.severity.value if claim else None)
+            )
 
     state_pairs = scores.state_pairs
     for f in case.expected_findings:
@@ -189,6 +218,8 @@ def run_eval(cases: list[GoldenCase], settings: Settings) -> EvalReport:
     cat_fp: Counter = Counter()
     cat_fn: Counter = Counter()
     state_pairs: list[tuple[str, str | None]] = []
+    status_pairs: list[tuple[str, str | None]] = []
+    severity_pairs: list[tuple[str, str | None]] = []
     for case in cases:
         scores = _score_case(case, settings)
         results.append(scores.result)
@@ -196,6 +227,8 @@ def run_eval(cases: list[GoldenCase], settings: Settings) -> EvalReport:
         cat_fp.update(scores.cat_fp)
         cat_fn.update(scores.cat_fn)
         state_pairs.extend(scores.state_pairs)
+        status_pairs.extend(scores.status_pairs)
+        severity_pairs.extend(scores.severity_pairs)
 
     categories = {
         c: _prf(cat_tp[c], cat_fp[c], cat_fn[c])
@@ -216,6 +249,8 @@ def run_eval(cases: list[GoldenCase], settings: Settings) -> EvalReport:
         categories=categories,
         verification_states=states,
         state_accuracy=_accuracy(state_pairs),
+        legal_status_accuracy=_accuracy(status_pairs) if status_pairs else None,
+        severity_accuracy=_accuracy(severity_pairs) if severity_pairs else None,
     )
 
 
@@ -226,5 +261,5 @@ def compare_reports(
     return [
         f"{name}: {base[name]:.4f} -> {value:.4f}"
         for name, value in current.headline().items()
-        if value < base[name] - tolerance
+        if name in base and value < base[name] - tolerance
     ]

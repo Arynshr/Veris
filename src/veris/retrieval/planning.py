@@ -6,7 +6,6 @@ BACKGROUND_CHECK mode generates adverse-media risk-category queries.
 
 from veris.core.config import Settings, get_logger
 from veris.core.models import (
-    AdverseCategory,
     ResearchMode,
     ResearchPlan,
     SearchQuery,
@@ -23,21 +22,21 @@ _GENERAL_TEMPLATES: list[str] = [
     "{subject} criticism OR controversy",
 ]
 
-_ADVERSE_TEMPLATES: dict[AdverseCategory, list[str]] = {
-    AdverseCategory.LEGAL: ["{subject} lawsuit", "{subject} litigation OR sued"],
-    AdverseCategory.REGULATORY: [
+_ADVERSE_TEMPLATES: dict[str, list[str]] = {
+    "litigation": ["{subject} lawsuit", "{subject} litigation OR sued"],
+    "regulatory_sanctions": [
         "{subject} sanctions OR fine OR regulatory action",
         "{subject} SEC OR FTC OR investigation",
     ],
-    AdverseCategory.CRIMINAL: [
+    "criminal": [
         "{subject} fraud OR indicted OR charged",
         "{subject} arrest OR criminal investigation",
     ],
-    AdverseCategory.FINANCIAL: [
+    "financial_crime_fraud": [
         "{subject} bankruptcy OR insolvency",
         "{subject} embezzlement OR financial misconduct",
     ],
-    AdverseCategory.REPUTATIONAL: [
+    "reputational": [
         "{subject} scandal OR controversy",
         "{subject} allegations",
     ],
@@ -61,7 +60,7 @@ def _template_plan(
                         query_id=f"q{idx}",
                         text=template.format(subject=subject),
                         priority=1,
-                        rationale=f"Baseline {category.value} coverage",
+                        rationale=f"Baseline {category} coverage",
                     )
                 )
                 idx += 1
