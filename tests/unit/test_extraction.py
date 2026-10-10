@@ -1,7 +1,8 @@
 import pytest
 
 from veris.core.models import SearchProviderName, SearchResult
-from veris.retrieval.extraction import _canonicalize_url, retrieve_documents
+from veris.core.documents import canonicalize_url
+from veris.retrieval.extraction import retrieve_documents
 
 
 def _sr(url: str, rank: int, query_id: str = "q1") -> SearchResult:
@@ -15,12 +16,12 @@ def _sr(url: str, rank: int, query_id: str = "q1") -> SearchResult:
     )
 
 
-def test_canonicalize_url_strips_query_and_fragment_and_trailing_slash():
+def testcanonicalize_url_strips_query_and_fragment_and_trailing_slash():
     assert (
-        _canonicalize_url("https://Example.com/Path/?utm_source=x#frag")
+        canonicalize_url("https://Example.com/Path/?utm_source=x#frag")
         == "https://example.com/Path"
     )
-    assert _canonicalize_url("https://example.com/path/") == _canonicalize_url(
+    assert canonicalize_url("https://example.com/path/") == canonicalize_url(
         "https://example.com/path"
     )
 
@@ -99,7 +100,7 @@ def _fake_document(url: str):
 
     from veris.core.models import Document
 
-    canonical = _canonicalize_url(url)
+    canonical = canonicalize_url(url)
     return Document(
         document_id=hashlib.sha1(canonical.encode()).hexdigest()[:16],
         url=url,

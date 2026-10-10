@@ -1,5 +1,5 @@
 import pytest
-from conftest import FakeSearchProvider, make_search_query
+from tests.helpers import FakeSearchProvider, make_search_query
 
 from veris.retrieval.search import (
     FirecrawlProvider,

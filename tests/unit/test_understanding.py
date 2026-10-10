@@ -1,9 +1,12 @@
 import pytest
-from conftest import static_json_groq
+from tests.helpers import static_json_groq
 
 from veris.core.models import ResearchMode, SubjectMode
 from veris.intake.ingestion import extract_entities
 from veris.intake.understanding import _regex_fallback, understand_query
+
+
+pytestmark = pytest.mark.requires_spacy
 
 
 def test_regex_fallback_splits_ceo_and_cfo_into_two_role_terms():
@@ -43,6 +46,7 @@ async def test_understand_query_without_groq_uses_regex_fallback(settings_factor
 async def test_understand_query_with_groq_parses_response(
     settings_factory, monkeypatch
 ):
+
     fake = static_json_groq(
         {
             "mode": "role_group",

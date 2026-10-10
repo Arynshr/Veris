@@ -1,7 +1,7 @@
 import hashlib
 
 import pytest
-from conftest import FakeSearchProvider
+from tests.helpers import FakeSearchProvider
 
 from veris.core.models import (
     Document,
@@ -11,6 +11,10 @@ from veris.core.models import (
     SubjectType,
 )
 from veris.pipeline import run_research
+
+
+
+pytestmark = pytest.mark.requires_spacy
 
 
 def _fake_document(url: str) -> Document:

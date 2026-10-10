@@ -13,7 +13,7 @@ def test_eval_is_offline_and_deterministic(golden_dir, settings):
     first = run_eval(cases, settings)
     second = run_eval(cases, settings)
     assert first.model_dump_json() == second.model_dump_json()
-    assert first.schema_version == 1
+    assert first.schema_version == 2
 
 
 def test_clean_and_namesake_cases_produce_no_false_findings(golden_dir, settings):
