@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "case_id": "mixed_categories_one_doc",
+  "subject": "Rafael Castellanos",
+  "query": "Background check on Rafael Castellanos, CEO of Castellano Holdings",
+  "research_mode": "background_check",
+  "entities": [
+    {
+      "text": "Rafael Castellanos",
+      "label": "PERSON"
+    },
+    {
+      "text": "Castellano Holdings",
+      "label": "ORG"
+    }
+  ],
+  "documents": [
+    {
+      "url": "https://courts.fixture.gov/dockets/22-0417",
+      "title": "Docket summary 22-0417",
+      "content": "Rafael Castellanos, chief executive of Castellano Holdings, was indicted on wire fraud counts. Rafael Castellanos also faces a civil lawsuit filed by former investors over the same period. Arraignment is scheduled for the spring term."
+    }
+  ],
+  "expected_findings": [
+    {
+      "url": "https://courts.fixture.gov/dockets/22-0417",
+      "match_text": "was indicted on wire fraud counts",
+      "category": "criminal",
+      "verification": "VERIFIED",
+      "legal_status": "charged"
+    },
+    {
+      "url": "https://courts.fixture.gov/dockets/22-0417",
+      "match_text": "faces a civil lawsuit filed by former investors",
+      "category": "legal_litigation",
+      "verification": "VERIFIED",
+      "legal_status": "alleged"
+    }
+  ]
+}

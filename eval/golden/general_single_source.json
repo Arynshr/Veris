@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "case_id": "general_single_source",
+  "subject": "grid battery storage",
+  "query": "state of grid battery storage in 2026",
+  "research_mode": "general",
+  "entities": [
+    {
+      "text": "2026",
+      "label": "DATE"
+    }
+  ],
+  "documents": [
+    {
+      "url": "https://civicwire.example/storage-pilot",
+      "title": "Pilot project results",
+      "content": "A pilot grid battery storage project reduced peak demand charges by a fifth in its first year. The operator plans to publish full results next quarter."
+    }
+  ],
+  "expected_findings": [
+    {
+      "url": "https://civicwire.example/storage-pilot",
+      "match_text": "reduced peak demand charges",
+      "category": "general",
+      "verification": "SINGLE_SOURCE",
+      "legal_status": null
+    }
+  ]
+}

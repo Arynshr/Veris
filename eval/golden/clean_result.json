@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "case_id": "clean_result",
+  "subject": "Marta Velasquez",
+  "query": "Background check on Marta Velasquez, CTO of Lumen Robotics",
+  "research_mode": "background_check",
+  "entities": [
+    {
+      "text": "Marta Velasquez",
+      "label": "PERSON"
+    },
+    {
+      "text": "Lumen Robotics",
+      "label": "ORG"
+    }
+  ],
+  "documents": [
+    {
+      "url": "https://harborlight-times.example/profile",
+      "title": "Profile: Marta Velasquez",
+      "content": "Marta Velasquez has served as chief technology officer of Lumen Robotics since 2019. Under her leadership the company shipped three generations of warehouse automation hardware. Velasquez holds a doctorate in mechanical engineering and sits on two university advisory boards. Colleagues describe Marta Velasquez as a demanding but fair manager who mentors junior engineers."
+    },
+    {
+      "url": "https://northgate-post.example/award",
+      "title": "Lumen Robotics CTO honoured",
+      "content": "Marta Velasquez received an industry innovation award for her work at Lumen Robotics this spring. The award committee praised the company's safety record and its open-source contributions. Velasquez said the recognition belongs to the whole engineering organisation."
+    }
+  ],
+  "expected_findings": []
+}

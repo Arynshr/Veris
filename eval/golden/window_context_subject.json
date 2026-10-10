@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "case_id": "window_context_subject",
+  "subject": "Nadia Petrov",
+  "query": "Background check on Nadia Petrov, audit committee chair at Vantage Mining",
+  "research_mode": "background_check",
+  "entities": [
+    {
+      "text": "Nadia Petrov",
+      "label": "PERSON"
+    },
+    {
+      "text": "Vantage Mining",
+      "label": "ORG"
+    }
+  ],
+  "documents": [
+    {
+      "url": "https://civicwire.example/vantage-audit",
+      "title": "Vantage Mining audit committee censured",
+      "content": "Nadia Petrov chairs the audit committee at Vantage Mining. The regulator later imposed a penalty on the committee for reporting failures. Vantage Mining said it has strengthened its internal controls."
+    }
+  ],
+  "expected_findings": [
+    {
+      "url": "https://civicwire.example/vantage-audit",
+      "match_text": "imposed a penalty on the committee",
+      "category": "regulatory_sanctions",
+      "verification": "SINGLE_SOURCE",
+      "legal_status": "settled"
+    }
+  ]
+}

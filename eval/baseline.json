@@ -1,0 +1,218 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "case_id": "clean_result",
+      "findings": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "state_accuracy": 1.0
+    },
+    {
+      "case_id": "general_single_source",
+      "findings": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "state_accuracy": 1.0
+    },
+    {
+      "case_id": "general_topic_two_sources",
+      "findings": {
+        "tp": 2,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "state_accuracy": 1.0
+    },
+    {
+      "case_id": "low_quality_no_corroboration",
+      "findings": {
+        "tp": 2,
+        "fp": 2,
+        "fn": 0,
+        "precision": 0.5,
+        "recall": 1.0,
+        "f1": 0.6667
+      },
+      "state_accuracy": 1.0
+    },
+    {
+      "case_id": "mixed_categories_one_doc",
+      "findings": {
+        "tp": 2,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "state_accuracy": 1.0
+    },
+    {
+      "case_id": "namesake_different_person",
+      "findings": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "state_accuracy": 1.0
+    },
+    {
+      "case_id": "primary_regulator_fine",
+      "findings": {
+        "tp": 2,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "state_accuracy": 1.0
+    },
+    {
+      "case_id": "same_domain_duplicates",
+      "findings": {
+        "tp": 2,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "state_accuracy": 1.0
+    },
+    {
+      "case_id": "single_outlet_lawsuit",
+      "findings": {
+        "tp": 1,
+        "fp": 1,
+        "fn": 0,
+        "precision": 0.5,
+        "recall": 1.0,
+        "f1": 0.6667
+      },
+      "state_accuracy": 1.0
+    },
+    {
+      "case_id": "subject_not_in_document",
+      "findings": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "state_accuracy": 1.0
+    },
+    {
+      "case_id": "two_outlet_fraud",
+      "findings": {
+        "tp": 2,
+        "fp": 1,
+        "fn": 0,
+        "precision": 0.6667,
+        "recall": 1.0,
+        "f1": 0.8
+      },
+      "state_accuracy": 1.0
+    },
+    {
+      "case_id": "window_context_subject",
+      "findings": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "state_accuracy": 1.0
+    }
+  ],
+  "findings": {
+    "tp": 16,
+    "fp": 4,
+    "fn": 0,
+    "precision": 0.8,
+    "recall": 1.0,
+    "f1": 0.8889
+  },
+  "categories": {
+    "criminal": {
+      "tp": 4,
+      "fp": 0,
+      "fn": 1,
+      "precision": 1.0,
+      "recall": 0.8,
+      "f1": 0.8889
+    },
+    "general": {
+      "tp": 3,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "legal_litigation": {
+      "tp": 2,
+      "fp": 4,
+      "fn": 0,
+      "precision": 0.3333,
+      "recall": 1.0,
+      "f1": 0.5
+    },
+    "regulatory_sanctions": {
+      "tp": 4,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "reputational": {
+      "tp": 2,
+      "fp": 1,
+      "fn": 0,
+      "precision": 0.6667,
+      "recall": 1.0,
+      "f1": 0.8
+    }
+  },
+  "verification_states": {
+    "SINGLE_SOURCE": {
+      "tp": 8,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "VERIFIED": {
+      "tp": 8,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    }
+  },
+  "state_accuracy": 1.0
+}

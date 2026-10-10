@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "case_id": "single_outlet_lawsuit",
+  "subject": "Tomas Okafor",
+  "query": "Background check on Tomas Okafor, founder of Okafor Freight",
+  "research_mode": "background_check",
+  "entities": [
+    {
+      "text": "Tomas Okafor",
+      "label": "PERSON"
+    },
+    {
+      "text": "Okafor Freight",
+      "label": "ORG"
+    }
+  ],
+  "documents": [
+    {
+      "url": "https://civicwire.example/okafor-suit",
+      "title": "Freight founder sued by investors",
+      "content": "Former investors filed a lawsuit against Tomas Okafor, founder of Okafor Freight, in state court. The plaintiffs claim they were misled about the company's fleet valuation. Okafor Freight declined to comment on the litigation."
+    }
+  ],
+  "expected_findings": [
+    {
+      "url": "https://civicwire.example/okafor-suit",
+      "match_text": "filed a lawsuit against Tomas Okafor",
+      "category": "legal_litigation",
+      "verification": "SINGLE_SOURCE",
+      "legal_status": "alleged"
+    }
+  ]
+}

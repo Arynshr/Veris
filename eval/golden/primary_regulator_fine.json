@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "case_id": "primary_regulator_fine",
+  "subject": "Harlan Brightwater",
+  "query": "Background check on Harlan Brightwater, chairman of Brightwater Capital",
+  "research_mode": "background_check",
+  "entities": [
+    {
+      "text": "Harlan Brightwater",
+      "label": "PERSON"
+    },
+    {
+      "text": "Brightwater Capital",
+      "label": "ORG"
+    }
+  ],
+  "documents": [
+    {
+      "url": "https://enforcement.fixture.gov/releases/2025-114",
+      "title": "Enforcement release 2025-114",
+      "content": "The regulator announced a settled enforcement action against Harlan Brightwater and Brightwater Capital. Harlan Brightwater agreed to pay a civil penalty of two million dollars without admitting the findings. The order finds that the firm failed to maintain required compliance records between 2021 and 2023. Brightwater Capital has since replaced its compliance leadership."
+    }
+  ],
+  "expected_findings": [
+    {
+      "url": "https://enforcement.fixture.gov/releases/2025-114",
+      "match_text": "announced a settled enforcement action",
+      "category": "regulatory_sanctions",
+      "verification": "VERIFIED",
+      "legal_status": "settled"
+    },
+    {
+      "url": "https://enforcement.fixture.gov/releases/2025-114",
+      "match_text": "agreed to pay a civil penalty",
+      "category": "regulatory_sanctions",
+      "verification": "VERIFIED",
+      "legal_status": "settled"
+    }
+  ]
+}

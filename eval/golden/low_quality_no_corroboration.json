@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "case_id": "low_quality_no_corroboration",
+  "subject": "Elena Marsh",
+  "query": "Background check on Elena Marsh, consultant at Marsh Advisory",
+  "research_mode": "background_check",
+  "entities": [
+    {
+      "text": "Elena Marsh",
+      "label": "PERSON"
+    },
+    {
+      "text": "Marsh Advisory",
+      "label": "ORG"
+    }
+  ],
+  "documents": [
+    {
+      "url": "https://truthdiary.blogspot.com/marsh",
+      "title": "My experience with Elena Marsh",
+      "content": "Several readers say Elena Marsh was accused of misleading clients at Marsh Advisory about fees. The allegation has circulated in online forums for months without a formal complaint."
+    },
+    {
+      "url": "https://clientwatch.wordpress.com/marsh-advisory",
+      "title": "Marsh Advisory complaints",
+      "content": "A post on this site claims Elena Marsh was accused of misleading clients at Marsh Advisory about fees. No court or regulator record of the allegation was cited."
+    }
+  ],
+  "expected_findings": [
+    {
+      "url": "https://truthdiary.blogspot.com/marsh",
+      "match_text": "was accused of misleading clients",
+      "category": "reputational",
+      "verification": "SINGLE_SOURCE",
+      "legal_status": "alleged"
+    },
+    {
+      "url": "https://clientwatch.wordpress.com/marsh-advisory",
+      "match_text": "was accused of misleading clients",
+      "category": "reputational",
+      "verification": "SINGLE_SOURCE",
+      "legal_status": "alleged"
+    }
+  ]
+}

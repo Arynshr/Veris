@@ -1,0 +1,8 @@
+schema_version: 1
+tiers: {1: 1.0, 2: 0.8, 3: 0.6, 4: 0.2}
+default: {tier: 3, type: news}
+rules:
+  - {match: [.gov, .edu], tier: 1, type: primary}
+  - {match: [reuters.com, apnews.com], tier: 2, type: wire}
+  - {match: [blogspot.com, wordpress.com, medium.com], tier: 4, type: blog}
+  - {match: [reddit.com], tier: 4, type: forum}

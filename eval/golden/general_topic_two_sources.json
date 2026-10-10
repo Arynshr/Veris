@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "case_id": "general_topic_two_sources",
+  "subject": "grid battery storage",
+  "query": "state of grid battery storage in 2026",
+  "research_mode": "general",
+  "entities": [
+    {
+      "text": "2026",
+      "label": "DATE"
+    }
+  ],
+  "documents": [
+    {
+      "url": "https://harborlight-times.example/storage-boom",
+      "title": "Grid battery storage doubles",
+      "content": "Grid battery storage capacity in the region doubled during the last fiscal year, analysts said. Utilities cite falling cell prices as the main driver of the expansion."
+    },
+    {
+      "url": "https://northgate-post.example/storage-outlook",
+      "title": "Storage outlook",
+      "content": "Grid battery storage capacity in the region doubled during the last fiscal year, analysts said. Permitting delays remain the biggest obstacle to further growth."
+    }
+  ],
+  "expected_findings": [
+    {
+      "url": "https://harborlight-times.example/storage-boom",
+      "match_text": "capacity in the region doubled",
+      "category": "general",
+      "verification": "VERIFIED",
+      "legal_status": null
+    },
+    {
+      "url": "https://northgate-post.example/storage-outlook",
+      "match_text": "capacity in the region doubled",
+      "category": "general",
+      "verification": "VERIFIED",
+      "legal_status": null
+    }
+  ]
+}

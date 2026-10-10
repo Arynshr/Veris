@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "case_id": "same_domain_duplicates",
+  "subject": "Ingrid Solberg",
+  "query": "Background check on Ingrid Solberg, CFO of Fjord Energy",
+  "research_mode": "background_check",
+  "entities": [
+    {
+      "text": "Ingrid Solberg",
+      "label": "PERSON"
+    },
+    {
+      "text": "Fjord Energy",
+      "label": "ORG"
+    }
+  ],
+  "documents": [
+    {
+      "url": "https://harborlight-times.example/solberg-1",
+      "title": "Fjord Energy CFO indicted",
+      "content": "Ingrid Solberg, chief financial officer of Fjord Energy, was indicted on embezzlement counts last week. Fjord Energy has placed her on leave pending the outcome."
+    },
+    {
+      "url": "https://harborlight-times.example/solberg-2",
+      "title": "What we know about the Fjord Energy indictment",
+      "content": "Ingrid Solberg was indicted on embezzlement counts, according to court filings reviewed by this newspaper. The board of Fjord Energy has not commented further."
+    }
+  ],
+  "expected_findings": [
+    {
+      "url": "https://harborlight-times.example/solberg-1",
+      "match_text": "was indicted on embezzlement counts last week",
+      "category": "criminal",
+      "verification": "SINGLE_SOURCE",
+      "legal_status": "charged"
+    },
+    {
+      "url": "https://harborlight-times.example/solberg-2",
+      "match_text": "was indicted on embezzlement counts, according",
+      "category": "criminal",
+      "verification": "SINGLE_SOURCE",
+      "legal_status": "charged"
+    }
+  ]
+}

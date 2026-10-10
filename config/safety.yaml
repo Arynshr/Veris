@@ -1,0 +1,17 @@
+schema_version: 1
+
+injection_patterns:
+  - 'ignore (?:all |any |the )?(?:previous|prior|above|earlier) (?:instructions?|prompts?|rules?)'
+  - 'disregard (?:all |any |the )?(?:previous|prior|above|earlier)'
+  - 'forget (?:all |everything|your) (?:previous |prior )?(?:instructions?|rules?)'
+  - 'system prompt'
+  - 'developer (?:message|instructions?)'
+  - 'you are (?:now |no longer )?(?:a|an|the|chatgpt|dan)\b'
+  - 'act as (?:a|an|if)\b'
+  - 'pretend (?:to be|you are)'
+  - 'role[- ]?play'
+  - 'new instructions?'
+  - 'override (?:your |the )?(?:instructions?|rules?|guidelines?)'
+  - '(?:reveal|print|repeat|output) (?:your |the )?(?:system|hidden|initial) (?:prompt|instructions?)'
+  - 'respond only with'
+  - 'do not (?:mention|cite|include)'

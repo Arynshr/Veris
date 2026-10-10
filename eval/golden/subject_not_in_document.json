@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "case_id": "subject_not_in_document",
+  "subject": "Camille Durand",
+  "query": "Background check on Camille Durand, partner at Durand Studio",
+  "research_mode": "background_check",
+  "entities": [
+    {
+      "text": "Camille Durand",
+      "label": "PERSON"
+    },
+    {
+      "text": "Durand Studio",
+      "label": "ORG"
+    }
+  ],
+  "documents": [
+    {
+      "url": "https://northgate-post.example/regional-fraud",
+      "title": "Regional fraud ring dismantled",
+      "content": "Police in the region said a ring accused of card fraud was dismantled after a year-long investigation. Twelve suspects were charged and several face prosecution in the coming months. The operation targeted small retailers across three counties."
+    }
+  ],
+  "expected_findings": []
+}

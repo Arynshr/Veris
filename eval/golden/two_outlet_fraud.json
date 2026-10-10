@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "case_id": "two_outlet_fraud",
+  "subject": "Priya Ranganathan",
+  "query": "Background check on Priya Ranganathan, director of Solace Logistics",
+  "research_mode": "background_check",
+  "entities": [
+    {
+      "text": "Priya Ranganathan",
+      "label": "PERSON"
+    },
+    {
+      "text": "Solace Logistics",
+      "label": "ORG"
+    }
+  ],
+  "documents": [
+    {
+      "url": "https://harborlight-times.example/fraud-charge",
+      "title": "Director charged in invoice scheme",
+      "content": "Priya Ranganathan, a director of Solace Logistics, was charged with fraud on Tuesday, prosecutors said. The indictment alleges a scheme to inflate customer invoices over four years. Solace Logistics said it is cooperating with investigators."
+    },
+    {
+      "url": "https://northgate-post.example/solace-director",
+      "title": "Solace Logistics director faces fraud charge",
+      "content": "Priya Ranganathan, a director of Solace Logistics, was charged with fraud on Tuesday, prosecutors said. Her lawyer said she will contest every count in court."
+    }
+  ],
+  "expected_findings": [
+    {
+      "url": "https://harborlight-times.example/fraud-charge",
+      "match_text": "was charged with fraud on Tuesday",
+      "category": "criminal",
+      "verification": "VERIFIED",
+      "legal_status": "charged"
+    },
+    {
+      "url": "https://northgate-post.example/solace-director",
+      "match_text": "was charged with fraud on Tuesday",
+      "category": "criminal",
+      "verification": "VERIFIED",
+      "legal_status": "charged"
+    }
+  ]
+}

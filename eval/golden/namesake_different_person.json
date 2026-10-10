@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "case_id": "namesake_different_person",
+  "subject": "John Whitfield",
+  "query": "Background check on John Whitfield, CFO of Meridian Freight",
+  "research_mode": "background_check",
+  "entities": [
+    {
+      "text": "John Whitfield",
+      "label": "PERSON"
+    },
+    {
+      "text": "Meridian Freight",
+      "label": "ORG"
+    }
+  ],
+  "documents": [
+    {
+      "url": "https://civicwire.example/meridian-fine",
+      "title": "Meridian Freight CFO fined",
+      "content": "A regulator imposed a fine on John Whitfield, chief financial officer of Meridian Freight, over late filings. Meridian Freight said the filings were corrected within a month."
+    },
+    {
+      "url": "https://northgate-post.example/surgeon-suit",
+      "title": "Surgeon at Ashgrove Clinic named in malpractice suit",
+      "content": "John Whitfield, a surgeon at Ashgrove Clinic, was sued by a former patient in a malpractice lawsuit. The clinic said Whitfield remains in good standing with the medical board."
+    }
+  ],
+  "expected_findings": [
+    {
+      "url": "https://civicwire.example/meridian-fine",
+      "match_text": "imposed a fine on John Whitfield",
+      "category": "regulatory_sanctions",
+      "verification": "SINGLE_SOURCE",
+      "legal_status": "settled"
+    }
+  ]
+}
