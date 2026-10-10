@@ -222,3 +222,6 @@ __pycache__/
 
 #Runtime package
 runs/
+
+# Test_runs
+test_results/
