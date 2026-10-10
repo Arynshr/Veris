@@ -1,8 +1,8 @@
 import hashlib
 
 import pytest
-from tests.helpers import FakeSearchProvider
 
+from tests.helpers import FakeSearchProvider
 from veris.core.models import (
     Document,
     PipelineStage,
@@ -11,8 +11,6 @@ from veris.core.models import (
     SubjectType,
 )
 from veris.pipeline import run_research
-
-
 
 pytestmark = pytest.mark.requires_spacy
 

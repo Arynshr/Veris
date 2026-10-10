@@ -46,7 +46,10 @@ def groq_slot_llm(settings: Settings) -> SlotLLM | None:
     def call(system: str, user: str) -> str:
         response = client.chat.completions.create(
             model=settings.groq_model,
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
             temperature=0,
             response_format={
                 "type": "json_schema",
@@ -58,7 +61,9 @@ def groq_slot_llm(settings: Settings) -> SlotLLM | None:
     return call
 
 
-def _user_prompt(instruction: str, data_block: str, slot_ids: list[str], feedback: str) -> str:
+def _user_prompt(
+    instruction: str, data_block: str, slot_ids: list[str], feedback: str
+) -> str:
     parts = [
         instruction,
         f"Required slot_ids: {', '.join(slot_ids)}",
@@ -78,7 +83,11 @@ def fallback_slots(
     for claim in claims:
         if claim.claim_id in used or not is_eligible(claim, ctx):
             continue
-        others = [ctx.claims[i] for i in ctx.verdicts[claim.claim_id].conflicts_with if i in ctx.claims]
+        others = [
+            ctx.claims[i]
+            for i in ctx.verdicts[claim.claim_id].conflicts_with
+            if i in ctx.claims
+        ]
         group = [claim, *others]
         used.update(c.claim_id for c in group)
         text = claim.text
@@ -115,7 +124,9 @@ def synthesize_slots(
         if not pending:
             break
         try:
-            raw = llm(SYSTEM_PROMPT, _user_prompt(instruction, data_block, pending, feedback))
+            raw = llm(
+                SYSTEM_PROMPT, _user_prompt(instruction, data_block, pending, feedback)
+            )
             by_id = {s.slot_id: s for s in SlotResponse.model_validate_json(raw).slots}
         except Exception as exc:  # provider or schema failure -> retry/fallback
             logger.warning("slot generation failed: %s", exc)
@@ -132,7 +143,9 @@ def synthesize_slots(
         feedback = " | ".join(problems)
     out: list[SynthesisSlot] = []
     for slot_id, claims in expected.items():
-        out += [accepted[slot_id]] if slot_id in accepted else fallback_slots(
-            slot_id, claims, ctx, settings.summary_fallback_bullets
+        out += (
+            [accepted[slot_id]]
+            if slot_id in accepted
+            else fallback_slots(slot_id, claims, ctx, settings.summary_fallback_bullets)
         )
     return out

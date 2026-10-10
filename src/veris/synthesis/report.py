@@ -11,17 +11,17 @@ import asyncio
 from collections import defaultdict
 
 from veris.core.config import Settings
-from veris.synthesis.slots import SlotLLM, groq_slot_llm
-from veris.synthesis.summary import SUMMARY_SLOT_ID, build_summary_slots
 from veris.core.models import (
-    SynthesisSlot,
     Claim,
     Evidence,
     ResearchMode,
     ResolvedSubject,
+    SynthesisSlot,
     VerificationResult,
     VerificationStatus,
 )
+from veris.synthesis.slots import SlotLLM, groq_slot_llm
+from veris.synthesis.summary import SUMMARY_SLOT_ID, build_summary_slots
 
 _CATEGORY_HEADINGS: dict[str, str] = {
     "criminal": "Criminal",
@@ -42,6 +42,7 @@ _SCREENING_DISCLAIMER = (
     "can produce false matches - confirm identity details (role, location, employer) "
     "before relying on any finding. This is not a legal, credit, or compliance determination."
 )
+
 
 def _resolution_summary(subjects: list[ResolvedSubject]) -> str:
     if len(subjects) == 1 and subjects[0].resolution_confidence >= 0.99:

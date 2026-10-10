@@ -40,7 +40,9 @@ def test_plan_cap_is_respected(settings_factory):
 
 def test_background_check_plan_targets_adverse_topics(settings_factory):
     plan = run_planning(
-        settings_factory(max_queries_per_plan=25), "Jane Doe", ResearchMode.BACKGROUND_CHECK
+        settings_factory(max_queries_per_plan=25),
+        "Jane Doe",
+        ResearchMode.BACKGROUND_CHECK,
     )
     joined = " ".join(q.text.lower() for q in plan.queries)
     assert any(term in joined for term in ("lawsuit", "fraud", "sanction", "indict"))

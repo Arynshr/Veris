@@ -44,7 +44,9 @@ class Recorder:
         root.setLevel(logging.DEBUG)
         root.addHandler(handler)
         self._handler = handler
-        self.log.info("session start run_id=%s python=%s", self.run_id, platform.python_version())
+        self.log.info(
+            "session start run_id=%s python=%s", self.run_id, platform.python_version()
+        )
 
     def pytest_runtest_logstart(self, nodeid, location) -> None:
         _TestFilter.current = nodeid
@@ -101,7 +103,9 @@ class Recorder:
                 fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
         tmp.replace(path)
         shutil.copyfile(path, self.dir / "latest.jsonl")
-        self.log.info("session end exit=%s counts=%s results=%s", exitstatus, counts, path)
+        self.log.info(
+            "session end exit=%s counts=%s results=%s", exitstatus, counts, path
+        )
         if self._handler:
             logging.getLogger().removeHandler(self._handler)
             self._handler.close()

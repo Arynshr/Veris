@@ -5,7 +5,11 @@ from veris.core.config import MAX_SEARCH_RESULTS_CEILING
 
 
 def test_max_search_results_default_is_within_bounds(settings_factory):
-    assert 1 <= settings_factory().max_search_results_per_query <= MAX_SEARCH_RESULTS_CEILING
+    assert (
+        1
+        <= settings_factory().max_search_results_per_query
+        <= MAX_SEARCH_RESULTS_CEILING
+    )
 
 
 def test_max_search_results_hard_ceiling(settings_factory):

@@ -44,9 +44,13 @@ class Taxonomy(BaseModel):
             if unknown := set(row) - {"default", *self.categories}:
                 raise ValueError(f"severity.{status.value}: unknown {sorted(unknown)}")
         if set(self.status_precedence) != set(self.status_cues):
-            raise ValueError("status_precedence and status_cues must list the same statuses")
+            raise ValueError(
+                "status_precedence and status_cues must list the same statuses"
+            )
         self._category_res = {c: _compile(p) for c, p in self.categories.items()}
-        self._cue_res = {s: _compile(self.status_cues[s]) for s in self.status_precedence}
+        self._cue_res = {
+            s: _compile(self.status_cues[s]) for s in self.status_precedence
+        }
         return self
 
     @property

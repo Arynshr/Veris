@@ -70,8 +70,10 @@ def test_save_claims_roundtrips_with_schema_version(settings_factory):
 
     store = RunPersistence(settings_factory(), run_id="claims-run")
     store.init_dirs()
-    store.save_claims([Claim(claim_id="c1", text="t", subject="Acme", evidence_ids=["e1"])], subject="Acme")
+    store.save_claims(
+        [Claim(claim_id="c1", text="t", subject="Acme", evidence_ids=["e1"])],
+        subject="Acme",
+    )
     path = next(store.run_dir.rglob("claims.json"))
     data = json.loads(path.read_text())
     assert data[0]["claim_id"] == "c1" and data[0]["schema_version"] == 2
-

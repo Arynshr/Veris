@@ -1,7 +1,7 @@
 import pytest
 
-from veris.core.models import SearchProviderName, SearchResult
 from veris.core.documents import canonicalize_url
+from veris.core.models import SearchProviderName, SearchResult
 from veris.retrieval.extraction import retrieve_documents
 
 

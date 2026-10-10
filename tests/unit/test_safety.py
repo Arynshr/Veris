@@ -52,18 +52,35 @@ def test_loader_rejects_bad_schema(settings):
         SafetyConfig.model_validate(raw)
 
 
-def test_evidence_with_injected_window_is_flagged_and_claim_excluded(make_doc, entities, settings):
+def test_evidence_with_injected_window_is_flagged_and_claim_excluded(
+    make_doc, entities, settings
+):
     doc = make_doc(
         "https://one.example/a",
         f"Jane Doe of Acme Corp was charged with fraud by prosecutors on Tuesday. {INJECTION}",
     )
-    evidence = run_evidence_mapping([doc], "Jane Doe", entities, settings, research_mode=ResearchMode.BACKGROUND_CHECK)
+    evidence = run_evidence_mapping(
+        [doc],
+        "Jane Doe",
+        entities,
+        settings,
+        research_mode=ResearchMode.BACKGROUND_CHECK,
+    )
     assert evidence and all(INSTRUCTION_LIKE in e.flags for e in evidence)
     claims, _, _ = verify_all(evidence, settings, subject="Jane Doe")
     assert claims and all(c.flags == [INSTRUCTION_LIKE] for c in claims)
 
 
 def test_clean_evidence_is_not_flagged(make_doc, entities, settings):
-    doc = make_doc("https://one.example/a", "Jane Doe of Acme Corp was charged with fraud by prosecutors on Tuesday.")
-    evidence = run_evidence_mapping([doc], "Jane Doe", entities, settings, research_mode=ResearchMode.BACKGROUND_CHECK)
+    doc = make_doc(
+        "https://one.example/a",
+        "Jane Doe of Acme Corp was charged with fraud by prosecutors on Tuesday.",
+    )
+    evidence = run_evidence_mapping(
+        [doc],
+        "Jane Doe",
+        entities,
+        settings,
+        research_mode=ResearchMode.BACKGROUND_CHECK,
+    )
     assert evidence and not any(e.flags for e in evidence)

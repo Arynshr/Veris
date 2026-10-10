@@ -15,12 +15,18 @@ from veris.core.models import (
 )
 
 _SCALE = {
-    "thousand": 1e3, "k": 1e3, "million": 1e6, "m": 1e6,
-    "billion": 1e9, "bn": 1e9, "b": 1e9, "trillion": 1e12,
+    "thousand": 1e3,
+    "k": 1e3,
+    "million": 1e6,
+    "m": 1e6,
+    "billion": 1e9,
+    "bn": 1e9,
+    "b": 1e9,
+    "trillion": 1e12,
 }
 _NUM_RE = re.compile(
     r"(?<![\w.])(\d[\d,]*(?:\.\d+)?)(?:\s*(thousand|million|billion|trillion|bn|k|m|b)\b)?(?![A-Za-z])",
-    re.I,
+    re.IGNORECASE,
 )
 
 

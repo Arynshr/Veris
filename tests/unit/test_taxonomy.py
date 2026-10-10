@@ -13,8 +13,13 @@ def raw(prod_settings) -> dict:
 
 def test_production_taxonomy_loads_with_expected_categories(taxonomy):
     expected = {
-        "criminal", "regulatory_sanctions", "litigation", "financial_crime_fraud",
-        "corruption_bribery", "esg_labor_safety", "reputational",
+        "criminal",
+        "regulatory_sanctions",
+        "litigation",
+        "financial_crime_fraud",
+        "corruption_bribery",
+        "esg_labor_safety",
+        "reputational",
     }
     assert set(taxonomy.categories) == expected
     assert UNCATEGORIZED not in taxonomy.categories
@@ -36,7 +41,14 @@ def test_severity_matrix_is_total(taxonomy):
         lambda r: r["severity"]["convicted"].update({"default": "CRITICAL"}),
         lambda r: r.update(status_precedence=r["status_precedence"][:-1]),
     ],
-    ids=["schema", "uncategorized", "no-default", "unknown-category", "bad-level", "precedence"],
+    ids=[
+        "schema",
+        "uncategorized",
+        "no-default",
+        "unknown-category",
+        "bad-level",
+        "precedence",
+    ],
 )
 def test_invalid_taxonomy_is_rejected(raw, mutate):
     mutate(raw)
@@ -56,7 +68,9 @@ def test_status_rank_follows_precedence(taxonomy):
 
 
 def test_loader_is_cached(prod_settings):
-    assert load_taxonomy(prod_settings.taxonomy_path) is load_taxonomy(prod_settings.taxonomy_path)
+    assert load_taxonomy(prod_settings.taxonomy_path) is load_taxonomy(
+        prod_settings.taxonomy_path
+    )
 
 
 def test_loader_error_names_the_file(tmp_path, raw):

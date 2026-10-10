@@ -267,5 +267,5 @@ async def search_with_fallback(
         if key is None:
             raise ValueError("Key is required when caching is enabled")
         cache[key] = results
-    
+
     return results

@@ -14,7 +14,6 @@ from veris.core.models import (
     VerificationStatus,
 )
 
-
 _LEGACY_CATEGORIES = {
     "legal_litigation": "litigation",
     "financial": "financial_crime_fraud",

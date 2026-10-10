@@ -90,10 +90,9 @@ def _matches(evidence: Evidence, expected: ExpectedFinding) -> bool:
 
 
 def _is_finding(claim: Claim, research_mode: ResearchMode) -> bool:
-    return (
-        research_mode != ResearchMode.BACKGROUND_CHECK
-        or claim.categories != [UNCATEGORIZED]
-    )
+    return research_mode != ResearchMode.BACKGROUND_CHECK or claim.categories != [
+        UNCATEGORIZED
+    ]
 
 
 def _evidence_states(claims, verifications) -> dict[str, VerificationStatus]:

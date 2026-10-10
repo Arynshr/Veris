@@ -229,7 +229,8 @@ class Claim(BaseModel):
     out_of_window: bool = False
     undated: bool = False
     flags: list[str] = Field(
-        default_factory=list, description="Set when every supporting evidence item is flagged."
+        default_factory=list,
+        description="Set when every supporting evidence item is flagged.",
     )
 
 
@@ -246,7 +247,8 @@ class VerificationResult(BaseModel):
     independent_domains: int = Field(default=0, ge=0)
     reasons: list[str] = Field(default_factory=list)
     conflicts_with: list[str] = Field(
-        default_factory=list, description="Claim IDs on the opposing terminal-status side."
+        default_factory=list,
+        description="Claim IDs on the opposing terminal-status side.",
     )
 
 

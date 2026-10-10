@@ -1,10 +1,9 @@
 import pytest
-from tests.helpers import static_json_groq
 
+from tests.helpers import static_json_groq
 from veris.core.models import ResearchMode, SubjectMode
 from veris.intake.ingestion import extract_entities
 from veris.intake.understanding import _regex_fallback, understand_query
-
 
 pytestmark = pytest.mark.requires_spacy
 

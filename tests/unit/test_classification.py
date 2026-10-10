@@ -21,14 +21,20 @@ from veris.core.models import Severity
         ("He denies the fraud allegations.", L.ALLEGED),
         ("The fraud charges were dismissed last year.", L.DISMISSED_ACQUITTED),
         ("The judge dismissed the fraud case.", L.DISMISSED_ACQUITTED),
-        ("He was convicted of fraud but later acquitted on appeal.", L.DISMISSED_ACQUITTED),
+        (
+            "He was convicted of fraud but later acquitted on appeal.",
+            L.DISMISSED_ACQUITTED,
+        ),
         ("The fraud conviction was overturned.", L.DISMISSED_ACQUITTED),
         ("He was cleared of fraud by the court.", L.DISMISSED_ACQUITTED),
         ("Acme settled the fraud lawsuit for $2m.", L.SETTLED),
         ("He was charged with fraud in March.", L.CHARGED),
         ("He was indicted for fraud.", L.CHARGED),
         ("She pleaded not guilty to the fraud charges.", L.ALLEGED),
-        ("He was convicted, then the fraud conviction was quashed.", L.DISMISSED_ACQUITTED),
+        (
+            "He was convicted, then the fraud conviction was quashed.",
+            L.DISMISSED_ACQUITTED,
+        ),
     ],
 )
 def test_legal_status(taxonomy, text, status):
@@ -41,7 +47,9 @@ def test_legal_status(taxonomy, text, status):
         "She sells fine art in Paris.",
         "Wait 30 sec for the charged battery.",
         "A tennis court opened downtown.",
-        "The criminality of the plot kept readers hooked.".replace("criminality", "mystery"),
+        "The criminality of the plot kept readers hooked.".replace(
+            "criminality", "mystery"
+        ),
         "",
         "   ",
     ],

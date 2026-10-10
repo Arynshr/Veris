@@ -1,10 +1,8 @@
 import pytest
-from tests.helpers import FakeSearchProvider
 
+from tests.helpers import FakeSearchProvider
 from veris.core.models import QueryUnderstanding, SubjectMode
 from veris.intake.resolution import _is_singular_role, resolve_subjects
-
-
 
 pytestmark = pytest.mark.requires_spacy
 

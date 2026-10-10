@@ -85,9 +85,7 @@ def settings_factory(tmp_path: Path):
 @pytest.fixture
 def prod_settings(settings_factory) -> Settings:
     """Settings pointing at the real config/ files (for config-sanity tests only)."""
-    return settings_factory(
-        source_tiers_path=ROOT / "config" / "source_tiers.yaml"
-    )
+    return settings_factory(source_tiers_path=ROOT / "config" / "source_tiers.yaml")
 
 
 @pytest.fixture

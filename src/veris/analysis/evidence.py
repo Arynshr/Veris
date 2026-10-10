@@ -11,8 +11,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from veris.analysis.matching import subject_match_score
-from veris.analysis.taxonomy import load_taxonomy
 from veris.analysis.safety import INSTRUCTION_LIKE, load_safety
+from veris.analysis.taxonomy import load_taxonomy
 from veris.core.config import Settings, get_logger
 from veris.core.ids import stable_id
 from veris.core.models import (
@@ -29,6 +29,7 @@ _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 _MIN_SENTENCE_LEN = 40
 _MAX_EVIDENCE_PER_DOCUMENT = 5
 _MIN_RELEVANCE_SCORE_GENERAL = 0.05
+
 
 @dataclass(frozen=True)
 class _Sentence:

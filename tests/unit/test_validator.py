@@ -55,19 +55,30 @@ def test_rejections(base, text, fragment):
 def test_rejects_unknown_and_missing_citations(base):
     claim, ctx = base
     assert any("unknown" in e for e in check_slot(ctx, GOOD, ["claim_fake"]))
-    assert any("unknown" in e for e in check_slot(ctx, GOOD, [claim.claim_id, "claim_fake"]))
+    assert any(
+        "unknown" in e for e in check_slot(ctx, GOOD, [claim.claim_id, "claim_fake"])
+    )
     assert check_slot(ctx, GOOD, []) != []
 
 
 def test_hedged_wording_is_always_allowed(base):
     claim, ctx = base
-    assert check_slot(ctx, "John Smith is accused of fraud, reported in 2024 by regulators.", [claim.claim_id]) == []
+    assert (
+        check_slot(
+            ctx,
+            "John Smith is accused of fraud, reported in 2024 by regulators.",
+            [claim.claim_id],
+        )
+        == []
+    )
 
 
 def test_eligibility_matrix(base):
     claim, ctx = base
     assert is_eligible(claim, ctx)
-    assert not is_eligible(claim.model_copy(update={"flags": ["instruction_like"]}), ctx)
+    assert not is_eligible(
+        claim.model_copy(update={"flags": ["instruction_like"]}), ctx
+    )
     assert not is_eligible(claim.model_copy(update={"out_of_window": True}), ctx)
     assert not is_eligible(claim.model_copy(update={"claim_id": "claim_nope"}), ctx)
 
@@ -76,14 +87,26 @@ def test_slot_with_flagged_claim_is_rejected(base):
     claim, ctx = base
     flagged = claim.model_copy(update={"flags": ["instruction_like"]})
     ctx.claims[claim.claim_id] = flagged
-    errors = validate_slot(SynthesisSlot(slot_id="s", text=GOOD, claim_ids=[claim.claim_id]), ctx)
+    errors = validate_slot(
+        SynthesisSlot(slot_id="s", text=GOOD, claim_ids=[claim.claim_id]), ctx
+    )
     assert any("flagged" in e for e in errors)
 
 
 def test_conflicted_requires_both_sides(settings):
     ev = [
-        make_evidence("e1", "John Smith was convicted of fraud in the Acme case.", "https://reuters.com/a", "2025-03-01"),
-        make_evidence("e2", "John Smith was acquitted of fraud in the Acme case.", "https://apnews.com/b", "2025-09-01"),
+        make_evidence(
+            "e1",
+            "John Smith was convicted of fraud in the Acme case.",
+            "https://reuters.com/a",
+            "2025-03-01",
+        ),
+        make_evidence(
+            "e2",
+            "John Smith was acquitted of fraud in the Acme case.",
+            "https://apnews.com/b",
+            "2025-09-01",
+        ),
     ]
     claims, _, ctx = verify_all(ev, settings)
     a, b = (c.claim_id for c in claims)

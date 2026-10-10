@@ -21,7 +21,9 @@ def _norm(text: str) -> str:
     return text.strip().lower()
 
 
-def make_search_query(text: str, query_id: str = "q1", priority: int = 1) -> SearchQuery:
+def make_search_query(
+    text: str, query_id: str = "q1", priority: int = 1
+) -> SearchQuery:
     return SearchQuery(query_id=query_id, text=text, priority=priority)
 
 

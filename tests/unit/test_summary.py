@@ -15,7 +15,11 @@ BASE = [make_evidence("e1", GOOD)]
 def run(settings):
     def _run(evidence, llm):
         claims, results, ctx = verify_all(evidence, settings)
-        return claims, build_summary_slots(claims, results, evidence, settings, llm), ctx
+        return (
+            claims,
+            build_summary_slots(claims, results, evidence, settings, llm),
+            ctx,
+        )
 
     return _run
 
@@ -29,7 +33,12 @@ def test_valid_response_is_accepted_once(run, settings):
 
 def test_retry_feeds_back_rejection_then_accepts(run, settings):
     cid = verify_all(BASE, settings)[0][0].claim_id
-    llm = FakeLLM(slot_json("John Smith was acquitted of fraud in 2024 and later praised.", [cid]), slot_json(GOOD, [cid]))
+    llm = FakeLLM(
+        slot_json(
+            "John Smith was acquitted of fraud in 2024 and later praised.", [cid]
+        ),
+        slot_json(GOOD, [cid]),
+    )
     _, slots, _ = run(BASE, llm)
     assert llm.calls == 2 and slots[0].text == GOOD and "rejected" in llm.prompts[1]
 
@@ -48,7 +57,10 @@ def test_failures_fall_back_to_valid_bullets(run, replies):
     llm = FakeLLM(*replies)
     claims, slots, ctx = run(BASE, llm)
     assert llm.calls == 2 and slots
-    assert all(s.slot_id.startswith("summary.") and check_slot(ctx, s.text, s.claim_ids) == [] for s in slots)
+    assert all(
+        s.slot_id.startswith("summary.") and check_slot(ctx, s.text, s.claim_ids) == []
+        for s in slots
+    )
 
 
 def test_fabricated_citation_never_reaches_output(run):
@@ -59,10 +71,18 @@ def test_fabricated_citation_never_reaches_output(run):
 
 def test_extra_slots_in_response_are_ignored(run, settings):
     cid = verify_all(BASE, settings)[0][0].claim_id
-    reply = json.dumps({"slots": [
-        {"slot_id": "other", "text": "Invented text with $9 billion.", "claim_ids": [cid]},
-        {"slot_id": "summary", "text": GOOD, "claim_ids": [cid]},
-    ]})
+    reply = json.dumps(
+        {
+            "slots": [
+                {
+                    "slot_id": "other",
+                    "text": "Invented text with $9 billion.",
+                    "claim_ids": [cid],
+                },
+                {"slot_id": "summary", "text": GOOD, "claim_ids": [cid]},
+            ]
+        }
+    )
     _, slots, _ = run(BASE, FakeLLM(reply))
     assert [s.slot_id for s in slots] == ["summary"]
 
@@ -74,7 +94,16 @@ def test_no_llm_uses_fallback_and_no_claims_returns_empty(run, settings):
 
 
 def test_injection_is_excluded_from_prompt_and_citations(run):
-    ev = [*BASE, make_evidence("e9", f"John Smith was fined last year. {INJECTION}", "https://reuters.com/z", "2025-04-01", ["instruction_like"])]
+    ev = [
+        *BASE,
+        make_evidence(
+            "e9",
+            f"John Smith was fined last year. {INJECTION}",
+            "https://reuters.com/z",
+            "2025-04-01",
+            ["instruction_like"],
+        ),
+    ]
     llm = FakeLLM("{}")
     claims, slots, _ = run(ev, llm)
     flagged = {c.claim_id for c in claims if c.flags}
@@ -84,8 +113,18 @@ def test_injection_is_excluded_from_prompt_and_citations(run):
 
 def test_prompt_is_deterministic_and_severity_ordered(run, settings):
     ev = [
-        make_evidence("e1", "John Smith was sued over a lease dispute.", "https://reuters.com/a", "2025-05-01"),
-        make_evidence("e2", "John Smith was convicted of fraud in the Acme case.", "https://reuters.com/b", "2025-02-01"),
+        make_evidence(
+            "e1",
+            "John Smith was sued over a lease dispute.",
+            "https://reuters.com/a",
+            "2025-05-01",
+        ),
+        make_evidence(
+            "e2",
+            "John Smith was convicted of fraud in the Acme case.",
+            "https://reuters.com/b",
+            "2025-02-01",
+        ),
     ]
     prompts = []
     for _ in range(2):
@@ -94,7 +133,9 @@ def test_prompt_is_deterministic_and_severity_ordered(run, settings):
         prompts.append(llm.prompts[0])
     assert prompts[0] == prompts[1]
     lines = [ln for ln in prompts[0].splitlines() if ln.startswith("[claim_")]
-    order = {s.value: i for i, s in enumerate((Severity.HIGH, Severity.MEDIUM, Severity.LOW))}
+    order = {
+        s.value: i for i, s in enumerate((Severity.HIGH, Severity.MEDIUM, Severity.LOW))
+    }
     levels = [order[ln.split("severity=")[1].split(" ")[0]] for ln in lines]
     assert levels == sorted(levels) and levels[0] == 0
 

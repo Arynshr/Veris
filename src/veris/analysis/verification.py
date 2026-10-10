@@ -14,6 +14,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 from veris.analysis.classification import Classification, classify
 from veris.analysis.matching import subject_match_score
+from veris.analysis.safety import INSTRUCTION_LIKE
 from veris.analysis.sources import (
     SourceClassification,
     load_source_policy,
@@ -22,7 +23,6 @@ from veris.analysis.sources import (
 from veris.analysis.taxonomy import UNCATEGORIZED, Taxonomy, load_taxonomy
 from veris.analysis.temporal import DateInfo, resolve_dates, window_start
 from veris.core.config import Settings
-from veris.analysis.safety import INSTRUCTION_LIKE
 from veris.core.ids import stable_id
 from veris.core.models import (
     Claim,
@@ -173,7 +173,9 @@ def _build_claims(
     disagree splits into one claim per side, linked via the conflicts map."""
     claims: list[Claim] = []
     conflicts: dict[str, list[str]] = {}
-    text_of = (lambda e: taxonomy.strip_cues(e.claim)) if adverse else (lambda e: e.claim)
+    text_of = (
+        (lambda e: taxonomy.strip_cues(e.claim)) if adverse else (lambda e: e.claim)
+    )
     for cluster in _cluster_evidence(
         evidence_list, settings.claim_dedup_similarity, text_of
     ):
@@ -283,7 +285,9 @@ def run_verification(
             )
         if claim.claim_id in conflicts:
             status = VerificationStatus.CONFLICTED
-            reasons.append("terminal legal statuses disagree (convicted vs dismissed_acquitted)")
+            reasons.append(
+                "terminal legal statuses disagree (convicted vs dismissed_acquitted)"
+            )
         scored = matching or checks
         results.append(
             VerificationResult(

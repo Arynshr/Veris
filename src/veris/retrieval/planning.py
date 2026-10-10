@@ -42,6 +42,7 @@ _ADVERSE_TEMPLATES: dict[str, list[str]] = {
     ],
 }
 
+
 def _template_plan(
     subject: str, research_mode: ResearchMode, max_queries: int
 ) -> ResearchPlan:

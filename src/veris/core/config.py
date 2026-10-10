@@ -45,7 +45,8 @@ class Settings(BaseSettings):
 
     lookback_years: int = Field(default=2, ge=1)
     as_of_date: date | None = Field(
-        default=None, description="Reference date for the lookback window (default: today)."
+        default=None,
+        description="Reference date for the lookback window (default: today).",
     )
     min_subject_name_overlap: float = 0.6
     max_resolved_subjects: int = 8
@@ -90,9 +91,14 @@ def get_logger(name: str) -> logging.Logger:
 def config_hash(settings: Settings) -> str:
     """Stable hash of non-secret settings plus the YAML policy files."""
     payload = settings.model_dump(
-        mode="json", exclude={k for k in type(settings).model_fields if k.endswith("_api_key")}
+        mode="json",
+        exclude={k for k in type(settings).model_fields if k.endswith("_api_key")},
     )
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode())
-    for path in (settings.source_tiers_path, settings.taxonomy_path, settings.safety_path):
+    for path in (
+        settings.source_tiers_path,
+        settings.taxonomy_path,
+        settings.safety_path,
+    ):
         digest.update(Path(path).read_bytes())
     return digest.hexdigest()[:16]
