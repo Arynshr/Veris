@@ -1,10 +1,7 @@
 """
-Evidence mapping (spec section 9), mode-aware and using TF-IDF cosine similarity
+Evidence mapping, mode-aware and using TF-IDF cosine similarity
 instead of raw keyword substring counting: Document -> relevant passages ->
-Evidence -> candidate claim. Documents must first pass an identity gate; each
-passage is the anchor sentence plus its neighbours; when that window doesn't
-name the subject, the nearest mention is recorded as context (identity is still
-judged on the contiguous passage only).
+Evidence -> candidate claim.
 """
 
 import re

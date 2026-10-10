@@ -12,7 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from veris.analysis import run_evidence_mapping, run_verification
-from veris.core.config import Settings, get_logger, get_settings
+from veris.analysis.safety import load_safety
+from veris.analysis.sources import load_source_policy
+from veris.analysis.taxonomy import load_taxonomy
+from veris.core.config import Settings, config_hash, get_logger, get_settings
 from veris.core.models import (
     Claim,
     Document,
@@ -247,6 +250,7 @@ async def _run_subject_pipeline(
         settings=settings,
         research_mode=research_mode,
     )
+    store.save_claims(claims, subject=name)
     store.save_verification(verifications, subject=name)
     collected_claims.extend(claims)
     collected_verifications.extend(verifications)
@@ -264,6 +268,13 @@ async def _run_subject_pipeline(
     )
 
 
+def _validate_policy_files(settings: Settings) -> None:
+    """Fail before any search/crawl spend if a policy YAML is invalid."""
+    load_source_policy(settings.source_tiers_path)
+    load_taxonomy(settings.taxonomy_path)
+    load_safety(settings.safety_path)
+
+
 async def stream_research(
     query: str,
     output_path: str = "report.md",
@@ -279,6 +290,12 @@ async def stream_research(
     yield _emit(
         store, PipelineStage.UNDERSTANDING, EventStatus.STARTED, "Parsing request"
     )
+
+    try:
+        _validate_policy_files(settings)
+    except ValueError as exc:
+        yield _emit(store, PipelineStage.UNDERSTANDING, EventStatus.FAILED, str(exc))
+        raise
 
     try:
         provider_chain = build_provider_chain(settings)
@@ -424,6 +441,7 @@ async def stream_research(
                 claims_verified=total_verified,
                 claims_single_source=total_single_source,
                 claims_conflicted=total_conflicted,
+                config_hash=config_hash(settings),
             )
         )
     except Exception as exc:

@@ -36,11 +36,12 @@ def text_dates(text: str) -> list[date]:
     found: list[date | None] = []
     found += [_safe(int(y), int(m), int(d)) for y, m, d in _ISO_RE.findall(text)]
     found += [
-        _safe(int(y), _MONTHS[mon[:3].lower()], int(d or 1))
-        for mon, d, y in _MDY_RE.findall(text)
-    ]
-    found += [
         _safe(int(y), _MONTHS[mon[:3].lower()], int(d)) for d, mon, y in _DMY_RE.findall(text)
+    ]
+    remainder = _DMY_RE.sub(" ", text)  # avoid re-reading "5 May 2022" as "May 2022"
+    found += [
+        _safe(int(y), _MONTHS[mon[:3].lower()], int(d or 1))
+        for mon, d, y in _MDY_RE.findall(remainder)
     ]
     found += [_safe(int(y), 1, 1) for y in _YEAR_ONLY_RE.findall(text)]
     return [d for d in found if d]
