@@ -95,6 +95,9 @@ class RunPersistence:
             if line.strip()
         ]
 
+    def save_report_json(self, report) -> Path:
+        return self._write_json(self.run_dir / "report.json", report)
+
     def save_report(self, markdown: str) -> Path:
         path = self.run_dir / "report.md"
         path.write_text(markdown, encoding="utf-8")

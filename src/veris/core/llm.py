@@ -146,6 +146,7 @@ class LLMClient:
     ) -> None:
         self.cfg = cfg
         self.validated = False
+        self.failures: list[str] = []
         key = cfg.api_key.get_secret_value() if cfg.api_key else ""
         headers = {"content-type": "application/json"}
         if cfg.kind == "anthropic":
@@ -187,7 +188,31 @@ class LLMClient:
             f"{self.cfg.provider} {what} failed ({resp.status_code}): {detail}"
         )
 
+    def _record(self, exc: Exception) -> None:
+        self.failures.append(f"{type(exc).__name__}: {exc}"[:160])
+
     def complete(
+        self, system: str, user: str, *, schema: dict | None = None, json_mode: bool = False
+    ) -> str:
+        try:
+            return self._complete(system, user, schema=schema, json_mode=json_mode)
+        except LLMError as exc:
+            self._record(exc)
+            raise
+
+    def complete_json(self, system: str, user: str, *, schema: dict | None = None) -> dict:
+        text = self.complete(system, user, schema=schema, json_mode=schema is None)
+        try:
+            data = json.loads(text)
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            exc = LLMError(f"{self.cfg.provider} returned malformed JSON: {text[:80]!r}")
+            self._record(exc)
+            raise exc
+        return data
+
+    def _complete(
         self,
         system: str,
         user: str,

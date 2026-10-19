@@ -17,6 +17,7 @@ from veris.analysis.sources import load_source_policy
 from veris.analysis.taxonomy import UNCATEGORIZED, load_taxonomy
 from veris.core.config import Settings, config_hash, get_logger, get_settings
 from veris.core.llm import LLMError, get_llm
+from veris.core.ports import Extractor
 from veris.core.models import (
     Claim,
     Document,
@@ -38,13 +39,16 @@ from veris.core.models import (
 from veris.core.storage import RunPersistence
 from veris.intake import resolve_subjects, run_ingestion, understand_query
 from veris.retrieval import (
+    CrawlGuard,
+    build_extractor,
     build_provider_chain,
     retrieve_documents,
     run_planning,
     search_with_fallback,
 )
 from veris.retrieval.search import SearchProvider
-from veris.synthesis import run_synthesis
+from veris.synthesis import build_report, generate_summary, render_markdown
+from veris.synthesis.slots import make_slot_llm
 
 logger = get_logger(__name__)
 _STATE_LOG_LEVEL = {
@@ -86,6 +90,17 @@ class RunCounters:
     queries: int = 0
     providers: set[str] = field(default_factory=set)
     retrieval: RetrievalStats = field(default_factory=RetrievalStats)
+    search_failures: list[str] = field(default_factory=list)
+    empty_searches: list[str] = field(default_factory=list)
+
+
+def _degraded(counters: RunCounters, llm_failures: list[str]) -> list[str]:
+    items = {f"search_provider_failed:{f.split(':', 1)[0]}" for f in counters.search_failures}
+    items |= {f"search_no_results:{name}" for name in counters.empty_searches}
+    if counters.retrieval.attempted and not counters.retrieval.fetched:
+        items.add("retrieval_no_documents")
+    items |= {f"llm_failed:{f[:100]}" for f in llm_failures}
+    return sorted(items)
 
 
 def _adverse_by_severity(claims: list[Claim]) -> dict[str, int]:
@@ -135,6 +150,8 @@ async def _run_subject_pipeline(
     collected_evidence: list[Evidence],
     search_cache: dict[str, list[SearchResult]],
     document_cache: dict[str, Document | None],
+    extractor: Extractor,
+    guard: CrawlGuard,
     counters: RunCounters,
 ) -> AsyncIterator[PipelineEvent]:
     """PLAN -> SEARCH -> RETRIEVE -> REGISTER -> EVIDENCE -> VERIFY
@@ -180,6 +197,7 @@ async def _run_subject_pipeline(
                 chain=provider_chain,
                 news_bias=news_bias,
                 cache=search_cache,
+                failures=counters.search_failures,
             )
             for q in plan.queries
         )
@@ -187,14 +205,24 @@ async def _run_subject_pipeline(
     search_results = [r for batch in batches for r in batch]
     store.save_search_results(search_results, subject=name)
     counters.providers.update(r.provider.value for r in search_results)
-    yield _emit(
-        store,
-        PipelineStage.SEARCH,
-        EventStatus.COMPLETED,
-        f"{len(search_results)} results found",
-        subject=name,
-        results=len(search_results),
-    )
+    if search_results:
+        yield _emit(
+            store,
+            PipelineStage.SEARCH,
+            EventStatus.COMPLETED,
+            f"{len(search_results)} results found",
+            subject=name,
+            results=len(search_results),
+        )
+    else:
+        counters.empty_searches.append(name)
+        yield _emit(
+            store,
+            PipelineStage.SEARCH,
+            EventStatus.FAILED,
+            f"No results from any provider for {name}; continuing with no sources",
+            subject=name,
+        )
 
     yield _emit(
         store,
@@ -205,10 +233,12 @@ async def _run_subject_pipeline(
     )
     documents = await retrieve_documents(
         search_results,
+        extractor,
+        guard,
         cache=document_cache,
         max_documents=settings.max_documents_per_subject,
         stats=counters.retrieval,
-        paywall_codes=settings.paywall_status_codes,
+        retries=settings.extraction_retries,
     )
     yield _emit(
         store,
@@ -328,11 +358,13 @@ async def stream_research(
         raise
 
     try:
-        await asyncio.to_thread(get_llm(settings).validate)
+        llm = get_llm(settings)
+        await asyncio.to_thread(llm.validate)
     except LLMError as exc:
         yield _emit(store, PipelineStage.UNDERSTANDING, EventStatus.FAILED, str(exc))
         raise
 
+    llm_failures_start = len(llm.failures)
     ingestion = run_ingestion(user_prompt=query, system_prompt=settings.system_prompt)
     store.save_entities(ingestion.entities)
 
@@ -342,6 +374,8 @@ async def stream_research(
     search_cache: dict[str, list[SearchResult]] = {}
     document_cache: dict[str, Document | None] = {}
     counters = RunCounters()
+    guard = CrawlGuard(settings)
+    extractor = build_extractor(settings)
 
     if resolved_subjects_override:
         understanding = QueryUnderstanding(
@@ -351,7 +385,7 @@ async def stream_research(
             raw_query=query,
         )
     else:
-        understanding = await understand_query(query, ingestion.entities, settings)
+        understanding = await understand_query(query, ingestion.entities, llm)
         if research_mode_override:
             understanding.research_mode = research_mode_override
     store.save_understanding(understanding)
@@ -376,7 +410,7 @@ async def stream_research(
     else:
         try:
             resolved = await resolve_subjects(
-                understanding, settings, provider_chain, search_cache=search_cache
+                understanding, settings, provider_chain, search_cache=search_cache, llm=llm
             )
         except Exception as exc:
             yield _emit(store, PipelineStage.RESOLUTION, EventStatus.FAILED, str(exc))
@@ -412,6 +446,8 @@ async def stream_research(
                 all_evidence,
                 search_cache,
                 document_cache,
+                extractor,
+                guard,
                 counters,
             ):
                 yield event
@@ -423,7 +459,10 @@ async def stream_research(
                 f"{subject.name}: {exc}",
                 subject=subject.name,
             )
+            await extractor.close()
             raise
+
+    await extractor.close()
 
     total_verified, total_single_source, total_conflicted = _count_statuses(
         all_verifications
@@ -434,52 +473,59 @@ async def stream_research(
         store, PipelineStage.SYNTHESIS, EventStatus.STARTED, "Synthesizing report"
     )
     try:
-        report_markdown = await run_synthesis(
-            resolved,
-            all_claims,
-            all_verifications,
-            all_evidence,
-            settings,
-            understanding.research_mode,
+        summary = await generate_summary(
+            all_claims, all_verifications, all_evidence, settings, make_slot_llm(llm)
         )
     except Exception as exc:
         yield _emit(store, PipelineStage.SYNTHESIS, EventStatus.FAILED, str(exc))
         raise
     yield _emit(
-        store, PipelineStage.SYNTHESIS, EventStatus.COMPLETED, "Report generated"
+        store, PipelineStage.SYNTHESIS, EventStatus.COMPLETED, "Executive summary ready"
     )
 
     yield _emit(
         store, PipelineStage.OUTPUT, EventStatus.STARTED, "Writing report to disk"
     )
+    degraded = _degraded(counters, llm.failures[llm_failures_start:])
+    run_record = ResearchRun(
+        run_id=store.run_id,
+        query=query,
+        mode=understanding.mode,
+        research_mode=understanding.research_mode,
+        subjects=[s.name for s in resolved],
+        output_path="",
+        sources_retrieved=total_documents,
+        evidence_collected=len(all_evidence),
+        claims_verified=total_verified,
+        claims_single_source=total_single_source,
+        claims_conflicted=total_conflicted,
+        queries_run=counters.queries,
+        providers_used=sorted(counters.providers),
+        retrieval=counters.retrieval,
+        adverse_by_severity=_adverse_by_severity(all_claims),
+        degraded=degraded,
+        config_hash=config_hash(settings),
+    )
     try:
-        report_path = store.save_report(report_markdown)
+        report = build_report(
+            run_record,
+            resolved,
+            all_claims,
+            all_verifications,
+            all_evidence,
+            {d["document_id"]: str(d["retrieved_at"]) for d in store.load_documents()},
+            settings,
+            summary,
+            load_taxonomy(settings.taxonomy_path).category_order,
+        )
+        store.save_report_json(report)
+        report_path = store.save_report(render_markdown(report, settings))
         final_path: Path = report_path
         if output_path and output_path != "report.md":
             final_path = Path(output_path)
             final_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(report_path, final_path)
-
-        store.save_run_record(
-            ResearchRun(
-                run_id=store.run_id,
-                query=query,
-                mode=understanding.mode,
-                research_mode=understanding.research_mode,
-                subjects=[s.name for s in resolved],
-                output_path=str(final_path),
-                sources_retrieved=total_documents,
-                evidence_collected=len(all_evidence),
-                claims_verified=total_verified,
-                claims_single_source=total_single_source,
-                claims_conflicted=total_conflicted,
-                queries_run=counters.queries,
-                providers_used=sorted(counters.providers),
-                retrieval=counters.retrieval,
-                adverse_by_severity=_adverse_by_severity(all_claims),
-                config_hash=config_hash(settings),
-            )
-        )
+        store.save_run_record(run_record.model_copy(update={"output_path": str(final_path)}))
     except Exception as exc:
         yield _emit(store, PipelineStage.OUTPUT, EventStatus.FAILED, str(exc))
         raise
@@ -497,6 +543,7 @@ async def stream_research(
         claims_verified=total_verified,
         claims_single_source=total_single_source,
         claims_conflicted=total_conflicted,
+        degraded=degraded,
     )
 
 

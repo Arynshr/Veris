@@ -5,12 +5,11 @@ research mode applies
 """
 
 import asyncio
-import json
 import re
 
 
-from veris.core.config import Settings, get_logger
-from veris.core.llm import get_llm
+from veris.core.config import get_logger
+from veris.core.ports import LLM
 from veris.core.models import Entity, QueryUnderstanding, ResearchMode, SubjectMode
 
 logger = get_logger(__name__)
@@ -113,12 +112,14 @@ def _regex_fallback(query: str, entities: list[Entity]) -> QueryUnderstanding:
 
 
 async def understand_query(
-    query: str, entities: list[Entity], settings: Settings
+    query: str, entities: list[Entity], llm: LLM | None
 ) -> QueryUnderstanding:
+    if llm is None:
+        return _regex_fallback(query, entities)
     # Blocking network call - offloaded to a thread so it doesn't stall the
     # rest of the async pipeline (see planning.run_planning for the same fix).
     try:
-        return await asyncio.to_thread(_llm_classify, query, settings)
+        return await asyncio.to_thread(_llm_classify, query, llm)
     except Exception as exc:
         logger.warning(
             "LLM query understanding failed, falling back to regex classification: %s",
@@ -127,8 +128,8 @@ async def understand_query(
         return _regex_fallback(query, entities)
 
 
-def _llm_classify(query: str, settings: Settings) -> QueryUnderstanding:
-    data = json.loads(get_llm(settings).complete(_UNDERSTANDING_SYSTEM_PROMPT, query, json_mode=True))
+def _llm_classify(query: str, llm: LLM) -> QueryUnderstanding:
+    data = llm.complete_json(_UNDERSTANDING_SYSTEM_PROMPT, query)
     return QueryUnderstanding(
         mode=SubjectMode(data["mode"]),
         research_mode=ResearchMode(data.get("research_mode", "general")),

@@ -257,7 +257,11 @@ class RetrievalStats(BaseModel):
     attempted: int = 0
     fetched: int = 0
     failed: int = 0
+    timed_out: int = 0
+    access_denied: int = 0
     paywalled: int = 0
+    robots_blocked: int = 0
+    memory_skipped: int = 0
     snippet_only: int = 0
 
 
@@ -279,6 +283,7 @@ class ResearchRun(BaseModel):
     providers_used: list[str] = Field(default_factory=list)
     retrieval: RetrievalStats = Field(default_factory=RetrievalStats)
     adverse_by_severity: dict[str, int] = Field(default_factory=dict)
+    degraded: list[str] = Field(default_factory=list)
     config_hash: str = ""
 
 
@@ -286,3 +291,82 @@ class SynthesisSlot(BaseModel):
     slot_id: str
     text: str
     claim_ids: list[str]
+
+
+class ReportFinding(BaseModel):
+    claim_id: str
+    text: str
+    categories: list[str]
+    legal_status: LegalStatus
+    severity: Severity
+    verification: VerificationStatus
+    event_date: date | None = None
+    undated: bool = False
+    source: str
+    url: str
+    conflicts_with: list[str] = Field(default_factory=list)
+
+
+class SubjectSection(BaseModel):
+    name: str
+    role: str | None = None
+    resolution_note: str = ""
+    findings: list[ReportFinding] = Field(default_factory=list)
+    disputed: list[ReportFinding] = Field(default_factory=list)
+
+
+class CategoryRow(BaseModel):
+    subject: str
+    category: str
+    high: int = 0
+    medium: int = 0
+    low: int = 0
+    claim_ids: list[str]
+
+
+class AppendixRow(BaseModel):
+    claim_id: str
+    passage: str
+    url: str
+    retrieved_at: str = ""
+    status: VerificationStatus
+
+
+class Coverage(BaseModel):
+    queries_run: int
+    providers_used: list[str]
+    retrieval: RetrievalStats
+    sources_registered: int
+    unretrieved: int
+    earliest_event: date | None = None
+    latest_event: date | None = None
+    lookback_years: int
+    window_start: date
+    as_of: date
+    claims_total: int
+    claims_reported: int
+    out_of_window: int
+    undated: int
+    excluded_identity: int
+    excluded_unsupported: int
+    degraded: list[str] = Field(default_factory=list)
+    no_findings_note: str
+
+
+class ReportMeta(BaseModel):
+    query: str
+    research_mode: ResearchMode
+    min_independent_domains: int
+
+
+class Report(BaseModel):
+    schema_version: int = 1
+    template_version: str
+    run_id: str
+    config_hash: str
+    meta: ReportMeta
+    summary: SynthesisSlot | None = None
+    subjects: list[SubjectSection]
+    category_rows: list[CategoryRow]
+    appendix: list[AppendixRow]
+    coverage: Coverage

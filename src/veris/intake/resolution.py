@@ -5,12 +5,11 @@ actual names aren't known yet and must be looked up before research can start.
 """
 
 import asyncio
-import json
 import re
 from collections import Counter
 
 from veris.core.config import Settings, get_logger
-from veris.core.llm import get_llm
+from veris.core.ports import LLM
 from veris.core.models import (
     QueryUnderstanding,
     ResolvedSubject,
@@ -86,7 +85,7 @@ def _candidate_counts(
 
 
 def _llm_pick_singular(
-    role: str, organization: str | None, results: list[SearchResult], settings: Settings
+    role: str, organization: str | None, results: list[SearchResult], llm: LLM
 ) -> str | None:
     """Best-effort precise pick for a single-seat role, used when an LLM
     is configured. Falls back silently to the frequency-based candidate on
@@ -96,12 +95,9 @@ def _llm_pick_singular(
     snippets = "\n".join(f"- {r.title}: {r.snippet}" for r in results[:8])
     org_part = f" at {organization}" if organization else ""
     try:
-        raw = get_llm(settings).complete(
-            _ROLE_EXTRACTION_PROMPT,
-            f"Role: {role}{org_part}\n\nSnippets:\n{snippets}",
-            json_mode=True,
+        data = llm.complete_json(
+            _ROLE_EXTRACTION_PROMPT, f"Role: {role}{org_part}\n\nSnippets:\n{snippets}"
         )
-        data = json.loads(raw)
         name = (data.get("name") or "").strip()
         if name and data.get("confidence", 0) >= 0.5:
             return name
@@ -119,6 +115,7 @@ async def resolve_subjects(
     settings: Settings,
     provider_chain: list[SearchProvider],
     search_cache: dict[str, list[SearchResult]] | None = None,
+    llm: LLM | None = None,
 ) -> list[ResolvedSubject]:
     explicit = [
         ResolvedSubject(
@@ -180,9 +177,9 @@ async def resolve_subjects(
             continue
 
         chosen: list[str] = []
-        if singular:
+        if singular and llm is not None:
             picked = await asyncio.to_thread(
-                _llm_pick_singular, role, understanding.organization, results, settings
+                _llm_pick_singular, role, understanding.organization, results, llm
             )
             if picked:
                 chosen = [picked]

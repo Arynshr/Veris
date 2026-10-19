@@ -61,7 +61,18 @@ class Settings(BaseSettings):
     safety_path: Path = PROJECT_ROOT / "config" / "safety.yaml"
     templates_dir: Path = PROJECT_ROOT / "templates"
     template_version: str = "v1"
-    paywall_status_codes: list[int] = [401, 402, 403]
+    paywall_status_codes: list[int] = [402]
+    denied_status_codes: list[int] = [401, 403]
+    crawler_user_agent: str = "VerisBot/0.2 (research assistant; honours robots.txt)"
+    extraction_timeout_seconds: int = Field(default=30, ge=1)
+    extraction_retries: int = Field(default=1, ge=0)
+    extraction_concurrency: int = Field(default=4, ge=1)
+    provider_failure_threshold: int = Field(default=3, ge=1)
+    crawl_memory_path: Path = PROJECT_ROOT / ".veris" / "crawl_memory.json"
+    robots_ttl_hours: int = Field(default=24, ge=1)
+    denied_ttl_days: int = Field(default=7, ge=1)
+    host_denied_threshold: int = Field(default=3, ge=1)
+    report_passage_max_chars: int = Field(default=300, ge=50)
     slot_min_chars: int = Field(default=40, ge=1)
     slot_max_chars: int = Field(default=900, ge=1)
     summary_fallback_bullets: int = Field(default=3, ge=1)

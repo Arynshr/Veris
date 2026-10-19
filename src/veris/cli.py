@@ -4,6 +4,7 @@ CLI entrypoint (spec section 13).
     veris research "state of solid-state batteries in 2026"
     veris research "the board of directors of XYZ company" --mode background_check
     veris research --subject "Jane Doe" --context "CEO of Acme Corp" --mode background_check
+    veris providers
     veris inspect <run_id>
     veris sources <run_id>
     veris verify <run_id> [--subject "Jane Doe"]
@@ -41,7 +42,18 @@ from veris.evaluation import EvalReport, compare_reports, load_golden_cases, run
 from veris.pipeline import stream_research
 
 app = typer.Typer(
-    add_completion=False, help="Veris - evidence-grounded research assistant."
+    add_completion=False,
+    no_args_is_help=True,
+    rich_markup_mode="markdown",
+    help="""Veris researches a topic (or screens a person/company) and writes a cited Markdown report.
+
+**Quick start**
+
+1. Put your keys in a `.env` file: `LLM_PROVIDER`, `LLM_MODEL`, `LLM_API_KEY` (run `veris providers` to see the choices) and one search key: `TAVILY_API_KEY`, `FIRECRAWL_API_KEY` or `SEARXNG_BASE_URL`.
+2. Run `veris research "your topic"`.
+3. Open `report.md`. Use `veris inspect RUN_ID` to see what was found and `veris sources RUN_ID` for the pages used.
+
+Every run is saved under `runs/RUN_ID/`. Pages that refuse automated access (robots.txt, 401/403, paywalls) are skipped and remembered, never bypassed.""",
 )
 console = Console()
 
@@ -103,77 +115,106 @@ def _ensure_llm(settings):
 @app.command()
 def research(
     query: str = typer.Argument(
-        None, help='Free-text request, e.g. "state of solid-state batteries in 2026".'
+        None,
+        help='What to research, in plain English, e.g. "state of solid-state batteries in 2026". Omit it when using --subject.',
     ),
     mode: ResearchMode = typer.Option(
         None,
         "--mode",
         "-m",
-        help="Override auto-detected mode (general | background_check).",
+        help="`general` researches a topic; `background_check` screens a person or company for adverse news. Detected automatically if omitted.",
+        rich_help_panel="What to research",
     ),
     subject: str = typer.Option(
         None,
         "--subject",
         "-s",
-        help="Skip query understanding: research this exact name/topic directly.",
+        help="Research exactly this name or topic and skip request parsing.",
+        rich_help_panel="What to research",
     ),
     subject_type: SubjectType = typer.Option(
         SubjectType.TOPIC,
         "--type",
         "-t",
-        help="Subject type (only used with --subject).",
+        help="Kind of subject (person, topic, ...). Only used with --subject.",
+        rich_help_panel="What to research",
     ),
     context: str = typer.Option(
         "",
         "--context",
         "-c",
-        help="Disambiguating context, e.g. role, employer, location, timeframe.",
+        help="Detail that tells similar names apart: role, employer, city, years.",
+        rich_help_panel="What to research",
     ),
     output: str = typer.Option(
-        "report.md", "--output", "-o", help="Path to write the final Markdown report."
+        "report.md", "--output", "-o", help="Where to write the Markdown report."
     ),
     max_results: int = typer.Option(
         None,
         "--max-results",
         "-n",
-        help=f"Search results kept per query (1-{MAX_SEARCH_RESULTS_CEILING}, default: config value). Overrides for this run only.",
+        help=f"Search results kept per query (1-{MAX_SEARCH_RESULTS_CEILING}). This run only.",
+        rich_help_panel="Limits",
     ),
     max_queries: int = typer.Option(
         None,
         "--max-queries",
-        help="Max queries per research plan (overrides for this run only).",
+        help="Most search queries planned per subject. This run only.",
+        rich_help_panel="Limits",
     ),
     max_documents: int = typer.Option(
         None,
         "--max-documents",
         "-d",
-        help="Unique pages actually crawled per subject, best-ranked first (default: config value). Lower this if synthesis hits the model's token-per-minute limit.",
+        help="Most pages read per subject, best-ranked first. Lower it for faster, cheaper runs.",
+        rich_help_panel="Limits",
     ),
     max_subjects: int = typer.Option(
         None,
         "--max-subjects",
-        help="Max subjects a role/group request can resolve to, e.g. 'the board of directors of X' (overrides for this run only).",
+        help="Most people a group request can expand to, e.g. 'the board of directors of X'.",
+        rich_help_panel="Limits",
+    ),
+    provider: str = typer.Option(
+        None,
+        "--provider",
+        help="LLM provider, e.g. openai, anthropic, groq. See `veris providers`. Env: LLM_PROVIDER.",
+        rich_help_panel="LLM",
+    ),
+    model: str = typer.Option(
+        None, "--model", help="LLM model id. Env: LLM_MODEL.", rich_help_panel="LLM"
+    ),
+    llm_base_url: str = typer.Option(
+        None,
+        "--llm-base-url",
+        help="Endpoint for the `custom` provider or a proxy. Env: LLM_BASE_URL. The API key is read from LLM_API_KEY or asked for interactively.",
+        rich_help_panel="LLM",
     ),
     searxng_url: str = typer.Option(
         None,
         "--searxng-url",
-        help="SearXNG instance URL, e.g. http://localhost:8080. Opt-in only - unset means SearXNG is not used.",
-    ),
-    provider: str = typer.Option(
-        None, "--provider", help="LLM provider, see config/llm_providers.yaml (env: LLM_PROVIDER)."
-    ),
-    model: str = typer.Option(None, "--model", help="LLM model id (env: LLM_MODEL)."),
-    llm_base_url: str = typer.Option(
-        None, "--llm-base-url", help="Custom OpenAI-compatible endpoint (env: LLM_BASE_URL)."
+        help="Use your own SearXNG instance, e.g. http://localhost:8080. Off unless set.",
+        rich_help_panel="Search",
     ),
     run_id: str = typer.Option(
-        None, "--run-id", help="Optional explicit run id (default: generated)."
+        None, "--run-id", help="Name for this run (default: generated).", rich_help_panel="Other"
     ),
     verbose: bool = typer.Option(
-        False, "--verbose", "-v", help="Enable debug-level logging."
+        False, "--verbose", "-v", help="Show debug logs.", rich_help_panel="Other"
     ),
 ) -> None:
-    """Run the full research pipeline end-to-end, printing progress as it happens."""
+    """Research a topic or screen a person/company and write a cited report.
+
+    **Examples**
+
+    `veris research "state of solid-state batteries in 2026"`
+
+    `veris research "board of directors of Acme Corp" --mode background_check`
+
+    `veris research --subject "Jane Doe" --context "CEO of Acme Corp" -m background_check`
+
+    Needs an LLM (`LLM_PROVIDER`, `LLM_MODEL`, `LLM_API_KEY`) and a search key. If any are missing in a terminal, you are asked for them.
+    """
     if not query and not subject:
         console.print("[red]Provide either a free-text QUERY or --subject.[/red]")
         raise typer.Exit(code=1)
@@ -230,6 +271,8 @@ def research(
             "an extra subject-resolution search before research begins.[/dim]\n"
         )
 
+    degraded: list[str] = []
+
     async def _run() -> str | None:
         final_run_id = run_id
         async for event in stream_research(
@@ -246,6 +289,7 @@ def research(
                 and event.status == EventStatus.COMPLETED
             ):
                 final_run_id = event.data.get("run_id", final_run_id)
+                degraded.extend(event.data.get("degraded", []))
         return final_run_id
 
     try:
@@ -260,6 +304,25 @@ def research(
     console.print(
         f"\n[green]Research completed.[/green] [dim](veris inspect {completed_run_id})[/dim]"
     )
+    if degraded:
+        console.print("[yellow]Completed with warnings:[/yellow] " + ", ".join(degraded))
+
+
+@app.command()
+def providers() -> None:
+    """List supported LLM providers and how to configure them."""
+    try:
+        registry = load_providers(get_settings().llm_providers_path)
+    except LLMError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    table = Table("Provider", "API style", "Endpoint", "Key needed")
+    for name, spec in sorted(registry.providers.items()):
+        table.add_row(
+            name, spec.kind, spec.base_url or "set LLM_BASE_URL", "yes" if spec.key_required else "no"
+        )
+    console.print(table)
+    console.print("Set LLM_PROVIDER, LLM_MODEL and LLM_API_KEY (env or .env), then run `veris research ...`.")
 
 
 @app.command()
