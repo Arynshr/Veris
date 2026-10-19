@@ -23,8 +23,13 @@ class ProviderUnavailableError(RuntimeError):
     """Raised when a provider is misconfigured (e.g. missing API key)."""
 
 
+class ProviderResponseError(RuntimeError):
+    """Raised when a provider returns an unusable payload."""
+
+
 class SearchProvider(ABC):
     name: SearchProviderName
+    failures: int = 0
 
     @abstractmethod
     async def search(
@@ -53,6 +58,7 @@ class TavilyProvider(SearchProvider):
     ) -> list[SearchResult]:
         @retry(
             stop=stop_after_attempt(self._max_retries),
+            reraise=True,
             wait=wait_exponential(multiplier=1, min=1, max=8),
         )
         def _call():
@@ -64,17 +70,7 @@ class TavilyProvider(SearchProvider):
             return self._client.search(**kwargs)
 
         response = await asyncio.to_thread(_call)
-        return [
-            SearchResult(
-                query_id=query.query_id,
-                provider=self.name,
-                url=item["url"],
-                title=item.get("title", ""),
-                snippet=item.get("content", ""),
-                rank=rank,
-            )
-            for rank, item in enumerate(response.get("results", []), start=1)
-        ]
+        return _normalize(query, self.name, response, "results", "content", max_results)
 
 
 class FirecrawlProvider(SearchProvider):
@@ -96,6 +92,7 @@ class FirecrawlProvider(SearchProvider):
     ) -> list[SearchResult]:
         @retry(
             stop=stop_after_attempt(self._max_retries),
+            reraise=True,
             wait=wait_exponential(multiplier=1, min=1, max=8),
         )
         async def _call():
@@ -109,17 +106,7 @@ class FirecrawlProvider(SearchProvider):
                 return resp.json()
 
         data = await _call()
-        return [
-            SearchResult(
-                query_id=query.query_id,
-                provider=self.name,
-                url=item["url"],
-                title=item.get("title", ""),
-                snippet=item.get("description", ""),
-                rank=rank,
-            )
-            for rank, item in enumerate(data.get("data", [])[:max_results], start=1)
-        ]
+        return _normalize(query, self.name, data, "data", "description", max_results)
 
 
 class SearXNGProvider(SearchProvider):
@@ -141,6 +128,7 @@ class SearXNGProvider(SearchProvider):
     ) -> list[SearchResult]:
         @retry(
             stop=stop_after_attempt(self._max_retries),
+            reraise=True,
             wait=wait_exponential(multiplier=1, min=1, max=8),
         )
         async def _call():
@@ -153,17 +141,36 @@ class SearXNGProvider(SearchProvider):
                 return resp.json()
 
         data = await _call()
-        return [
+        return _normalize(query, self.name, data, "results", "content", max_results)
+
+
+def _normalize(
+    query: SearchQuery,
+    name: SearchProviderName,
+    payload: object,
+    items_key: str,
+    snippet_key: str,
+    limit: int | None = None,
+) -> list[SearchResult]:
+    items = payload.get(items_key, []) if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        raise ProviderResponseError(f"{name.value}: unexpected response shape")
+    out: list[SearchResult] = []
+    for item in items[:limit]:
+        url = item.get("url") if isinstance(item, dict) else None
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            continue
+        out.append(
             SearchResult(
                 query_id=query.query_id,
-                provider=self.name,
-                url=item["url"],
-                title=item.get("title", ""),
-                snippet=item.get("content", ""),
-                rank=rank,
+                provider=name,
+                url=url,
+                title=str(item.get("title") or ""),
+                snippet=str(item.get(snippet_key) or ""),
+                rank=len(out) + 1,
             )
-            for rank, item in enumerate(data.get("results", [])[:max_results], start=1)
-        ]
+        )
+    return out
 
 
 def build_provider_chain(settings: Settings) -> list[SearchProvider]:
@@ -222,6 +229,7 @@ async def search_with_fallback(
     chain: list[SearchProvider],
     news_bias: bool = False,
     cache: dict[str, list[SearchResult]] | None = None,
+    failures: list[str] | None = None,
 ) -> list[SearchResult]:
     """Run one query through the provider fallback chain.
 
@@ -242,19 +250,20 @@ async def search_with_fallback(
     last_error: Exception | None = None
     results: list[SearchResult] = []
     for provider in chain:
+        if provider.failures >= settings.provider_failure_threshold:
+            continue
         try:
             results = await provider.search(
                 query, settings.max_search_results_per_query, news_bias=news_bias
             )
+            provider.failures = 0
             if results:
                 break
         except Exception as exc:
-            logger.warning(
-                "Search provider %s failed for query '%s': %s",
-                provider.name,
-                query.text,
-                exc,
-            )
+            provider.failures += 1
+            logger.warning("Search provider %s failed for query '%s': %s", provider.name, query.text, exc)
+            if failures is not None:
+                failures.append(f"{provider.name.value}: {type(exc).__name__}: {exc}"[:200])
             last_error = exc
     else:
         logger.error(

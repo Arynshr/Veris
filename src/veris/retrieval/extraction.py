@@ -1,43 +1,143 @@
-"""Content extraction via Crawl4AI. Document failures are logged and counted, never fatal."""
+"""Extraction: Crawl4AI behind the Extractor interface, plus compliant, resilient retrieval."""
 
 import asyncio
 from collections.abc import Collection
 
-from crawl4ai import AsyncWebCrawler
-
-from veris.core.config import get_logger
+from veris.core.config import Settings, get_logger
 from veris.core.documents import build_document, canonicalize_url
 from veris.core.models import Document, RetrievalStats, SearchResult
+from veris.core.ports import Extractor, FetchOutcome, FetchResult
+from veris.retrieval.crawl_policy import CrawlGuard
 
 logger = get_logger(__name__)
 
+_RETRYABLE = {FetchOutcome.TIMEOUT, FetchOutcome.ERROR}
+_STAT_FIELD = {
+    "error": "failed",
+    "empty": "failed",
+    "rate_limited": "failed",
+    "timeout": "timed_out",
+    "forbidden": "access_denied",
+    "paywalled": "paywalled",
+    "robots_blocked": "robots_blocked",
+    "memory_skipped": "memory_skipped",
+}
 
-async def _extract_document(
-    url: str, title_hint: str = "", paywall_codes: Collection[int] = ()
+
+class Crawl4AIExtractor:
+    def __init__(
+        self,
+        user_agent: str,
+        timeout: int,
+        concurrency: int,
+        paywall_codes: Collection[int],
+        denied_codes: Collection[int],
+    ) -> None:
+        self._ua = user_agent
+        self._timeout = timeout
+        self._paywall = set(paywall_codes)
+        self._denied = set(denied_codes)
+        self._sem = asyncio.Semaphore(concurrency)
+        self._start_lock = asyncio.Lock()
+        self._crawler = None
+
+    async def _ensure(self):
+        async with self._start_lock:
+            if self._crawler is None:
+                from crawl4ai import AsyncWebCrawler, BrowserConfig
+
+                crawler = AsyncWebCrawler(config=BrowserConfig(user_agent=self._ua, verbose=False))
+                await crawler.start()
+                self._crawler = crawler
+        return self._crawler
+
+    async def close(self) -> None:
+        crawler, self._crawler = self._crawler, None
+        if crawler is not None:
+            try:
+                await crawler.close()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Crawler shutdown failed: %s", exc)
+
+    async def fetch(self, url: str, title_hint: str = "") -> FetchResult:
+        async with self._sem:
+            try:
+                crawler = await self._ensure()
+                result = await asyncio.wait_for(crawler.arun(url=url), self._timeout)
+            except asyncio.TimeoutError:
+                return FetchResult(outcome=FetchOutcome.TIMEOUT, detail=f"timed out after {self._timeout}s")
+            except Exception as exc:  # noqa: BLE001
+                return FetchResult(outcome=FetchOutcome.ERROR, detail=f"{type(exc).__name__}: {exc}"[:200])
+        return self._to_result(url, title_hint, result)
+
+    def _to_result(self, url: str, title_hint: str, result) -> FetchResult:
+        code = getattr(result, "status_code", None)
+        content = str(getattr(result, "markdown", "") or "").strip()
+        if code in self._paywall:
+            outcome = FetchOutcome.PAYWALLED
+        elif code in self._denied:
+            outcome = FetchOutcome.FORBIDDEN
+        elif code == 429:
+            outcome = FetchOutcome.RATE_LIMITED
+        elif getattr(result, "success", False) and content:
+            title = (getattr(result, "metadata", None) or {}).get("title") or title_hint
+            doc = build_document(url=url, title=title, content=content)
+            return FetchResult(outcome=FetchOutcome.OK, document=doc, status_code=code)
+        else:
+            outcome = FetchOutcome.EMPTY if getattr(result, "success", False) else FetchOutcome.ERROR
+        detail = str(getattr(result, "error_message", "") or "")[:200]
+        return FetchResult(outcome=outcome, status_code=code, detail=detail)
+
+
+def build_extractor(settings: Settings) -> Extractor:
+    return Crawl4AIExtractor(
+        settings.crawler_user_agent,
+        settings.extraction_timeout_seconds,
+        settings.extraction_concurrency,
+        settings.paywall_status_codes,
+        settings.denied_status_codes,
+    )
+
+
+async def _fetch_with_retry(extractor: Extractor, r: SearchResult, retries: int) -> FetchResult:
+    for attempt in range(retries + 1):
+        result = await extractor.fetch(r.url, r.title)
+        if result.outcome not in _RETRYABLE or attempt == retries:
+            break
+        await asyncio.sleep(min(2**attempt, 8))
+    return result
+
+
+async def _retrieve_one(
+    r: SearchResult, extractor: Extractor, guard: CrawlGuard, retries: int
 ) -> tuple[Document | None, str]:
     try:
-        async with AsyncWebCrawler() as crawler:
-            result = await crawler.arun(url=url)
-    except Exception as exc:
-        logger.warning("Extraction failed for %s: %s", url, exc)
-        return None, "failed"
-
-    if result and result.success and (result.markdown or "").strip():
-        title = (getattr(result, "metadata", {}) or {}).get("title") or title_hint
-        return build_document(url=url, title=title, content=result.markdown), "ok"
-    paywalled = getattr(result, "status_code", None) in paywall_codes
-    return None, "paywalled" if paywalled else "failed"
+        if blocked := await guard.check(r.url):
+            reason, remembered = blocked
+            logger.info("Skipping %s (%s)", r.url, reason.value)
+            return None, "memory_skipped" if remembered else "robots_blocked"
+        result = await _fetch_with_retry(extractor, r, retries)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Retrieval failed for %s: %s", r.url, exc)
+        return None, "error"
+    guard.record(r.url, result.outcome)
+    if result.outcome is not FetchOutcome.OK:
+        logger.info("Not retrieved %s: %s %s", r.url, result.outcome.value, result.detail)
+    return result.document, result.outcome.value
 
 
 async def retrieve_documents(
     search_results: list[SearchResult],
+    extractor: Extractor,
+    guard: CrawlGuard,
+    *,
     cache: dict[str, Document | None] | None = None,
     max_documents: int | None = None,
     stats: RetrievalStats | None = None,
-    paywall_codes: Collection[int] = (),
+    retries: int = 1,
 ) -> list[Document]:
     """One Document per unique URL, best-ranked first, capped at `max_documents`.
-    `cache` is shared across the run; `stats` accumulates fetch outcomes."""
+    `cache` is shared across the run; `stats` accumulates every outcome."""
     by_canonical: dict[str, SearchResult] = {}
     for r in search_results:
         canonical = canonicalize_url(r.url)
@@ -59,12 +159,10 @@ async def retrieve_documents(
             continue
         to_fetch.append(r)
 
-    extracted = await asyncio.gather(
-        *(_extract_document(r.url, r.title, paywall_codes) for r in to_fetch)
-    )
+    outcomes = await asyncio.gather(*(_retrieve_one(r, extractor, guard, retries) for r in to_fetch))
 
     fresh_docs: list[Document] = []
-    for r, (doc, outcome) in zip(to_fetch, extracted):
+    for r, (doc, outcome) in zip(to_fetch, outcomes):
         if cache is not None:
             cache[canonicalize_url(r.url)] = doc
         if stats is not None:
@@ -72,8 +170,8 @@ async def retrieve_documents(
             if doc is not None:
                 stats.fetched += 1
             else:
-                stats.paywalled += outcome == "paywalled"
-                stats.failed += outcome == "failed"
+                field = _STAT_FIELD[outcome]
+                setattr(stats, field, getattr(stats, field) + 1)
                 stats.snippet_only += bool(r.snippet.strip())
         if doc is not None:
             fresh_docs.append(doc)
