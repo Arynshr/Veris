@@ -192,9 +192,10 @@ def _build_claims(
             )
             for e in cluster
         ]
+        clean = [i for i in items if not i.evidence.flags] or items
         built = [
             _make_claim(g, subject, taxonomy, settings, as_of, adverse)
-            for g in (_split_terminal(items) if adverse else [items])
+            for g in (_split_terminal(clean) if adverse else [clean])
         ]
         if len(built) > 1:
             for claim in built:
