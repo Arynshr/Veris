@@ -14,8 +14,10 @@ CLI entrypoint (spec section 13).
 import asyncio
 import json
 import logging
+import sys
 from pathlib import Path
 
+import click
 import typer
 from pydantic import ValidationError
 from rich.console import Console
@@ -26,6 +28,7 @@ from veris.core.config import (
     configure_logging,
     get_settings,
 )
+from veris.core.llm import LLMError, load_providers, missing_llm_fields
 from veris.core.models import (
     EventStatus,
     PipelineStage,
@@ -62,6 +65,39 @@ def _print_event(event) -> None:
     console.print(
         f"[{style}]{icon}[/{style}] [bold]{event.stage.value:<13}[/bold] {subject_part} {event.message}"
     )
+
+
+def _ensure_llm(settings):
+    try:
+        missing = missing_llm_fields(settings)
+        providers = sorted(load_providers(settings.llm_providers_path).providers)
+    except LLMError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    if not missing:
+        return settings
+    if not sys.stdin.isatty():
+        console.print(
+            "[red]LLM not configured.[/red] Set "
+            + ", ".join(m.upper() for m in missing)
+            + " (env/.env) or pass --provider/--model."
+        )
+        raise typer.Exit(code=1)
+    rebuild = lambda u: type(settings)(**{**settings.model_dump(), **u})  # noqa: E731
+    updates: dict = {}
+    if "llm_provider" in missing:
+        updates["llm_provider"] = typer.prompt("LLM provider", type=click.Choice(providers))
+    if "llm_model" in missing:
+        updates["llm_model"] = typer.prompt("Model id")
+    try:
+        for name in missing_llm_fields(rebuild(updates)):
+            updates[name] = typer.prompt(
+                "API key" if name == "llm_api_key" else "Base URL", hide_input=name == "llm_api_key"
+            )
+    except LLMError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    return rebuild(updates)
 
 
 @app.command()
@@ -123,6 +159,13 @@ def research(
         "--searxng-url",
         help="SearXNG instance URL, e.g. http://localhost:8080. Opt-in only - unset means SearXNG is not used.",
     ),
+    provider: str = typer.Option(
+        None, "--provider", help="LLM provider, see config/llm_providers.yaml (env: LLM_PROVIDER)."
+    ),
+    model: str = typer.Option(None, "--model", help="LLM model id (env: LLM_MODEL)."),
+    llm_base_url: str = typer.Option(
+        None, "--llm-base-url", help="Custom OpenAI-compatible endpoint (env: LLM_BASE_URL)."
+    ),
     run_id: str = typer.Option(
         None, "--run-id", help="Optional explicit run id (default: generated)."
     ),
@@ -146,6 +189,9 @@ def research(
             "max_documents_per_subject": max_documents,
             "max_resolved_subjects": max_subjects,
             "searxng_base_url": searxng_url,
+            "llm_provider": provider,
+            "llm_model": model,
+            "llm_base_url": llm_base_url,
         }.items()
         if v is not None
     }
@@ -164,6 +210,8 @@ def research(
     except ValidationError as exc:
         console.print(f"[red]Invalid option:[/red] {exc}")
         raise typer.Exit(code=1)
+
+    settings = _ensure_llm(settings)
 
     override = None
     if subject:

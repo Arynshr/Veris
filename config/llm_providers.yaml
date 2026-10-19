@@ -1,0 +1,13 @@
+schema_version: 1
+providers:
+  openai: {base_url: https://api.openai.com/v1}
+  anthropic: {kind: anthropic, base_url: https://api.anthropic.com/v1}
+  gemini: {base_url: https://generativelanguage.googleapis.com/v1beta/openai}
+  groq: {base_url: https://api.groq.com/openai/v1}
+  openrouter: {base_url: https://openrouter.ai/api/v1}
+  together: {base_url: https://api.together.xyz/v1}
+  mistral: {base_url: https://api.mistral.ai/v1}
+  deepseek: {base_url: https://api.deepseek.com/v1}
+  xai: {base_url: https://api.x.ai/v1}
+  ollama: {base_url: http://localhost:11434/v1, key_required: false}
+  custom: {key_required: false}

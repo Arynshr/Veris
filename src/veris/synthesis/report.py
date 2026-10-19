@@ -11,7 +11,7 @@ import asyncio
 from collections import defaultdict
 
 from veris.core.config import Settings
-from veris.synthesis.slots import SlotLLM, groq_slot_llm
+from veris.synthesis.slots import SlotLLM, slot_llm
 from veris.synthesis.summary import SUMMARY_SLOT_ID, build_summary_slots
 from veris.core.models import (
     SynthesisSlot,
@@ -206,7 +206,7 @@ async def run_synthesis(
     llm: SlotLLM | None = None,
 ) -> str:
     """Body is rendered from data; the only model output is the validated summary slot."""
-    llm = llm or groq_slot_llm(settings)
+    llm = llm or slot_llm(settings)
 
     def build() -> str:
         grouped = _grouped_by_subject_category(claims, verifications, evidence_list)

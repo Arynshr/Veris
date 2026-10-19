@@ -2,21 +2,6 @@
 Subject resolution: when query understanding says the request names
 a role/group ("the board of directors of XYZ") rather than concrete names, the
 actual names aren't known yet and must be looked up before research can start.
-
-Fixed bug: previously every role term (singular or collective) was resolved
-by concatenating ALL search-result snippets together and pulling out every
-PERSON entity found anywhere in that blob. For a query like "CEO and CFO of
-Acme", each role search returned news articles that routinely also mention
-other board members, former executives, or journalists in the same snippet -
-all of which got added as resolved subjects. The result: asking for two
-named seats (CEO, CFO) silently expanded into a background check on the
-entire board. Singular, named seats ("CEO", "CFO", "president", "founder", ...)
-must resolve to exactly one person each; only genuinely collective phrases
-("board of directors", "executives", "leadership team", ...) may resolve to
-more than one, and even then only up to a small, dedicated cap
-(settings.max_group_role_size), scored by how often a name actually
-co-occurs with the role/org context rather than by mere presence anywhere
-in the result set.
 """
 
 import asyncio
