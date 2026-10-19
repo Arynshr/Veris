@@ -8,9 +8,9 @@ import asyncio
 import json
 import re
 
-from groq import Groq
 
 from veris.core.config import Settings, get_logger
+from veris.core.llm import get_llm
 from veris.core.models import Entity, QueryUnderstanding, ResearchMode, SubjectMode
 
 logger = get_logger(__name__)
@@ -59,7 +59,7 @@ Rules for "research_mode":
 
 
 def _regex_fallback(query: str, entities: list[Entity]) -> QueryUnderstanding:
-    """Deterministic fallback used when no Groq key is configured."""
+    """Deterministic fallback used when the LLM is unavailable."""
     persons = [e.text for e in entities if e.label == "PERSON"]
     orgs = [
         e.text
@@ -115,9 +115,6 @@ def _regex_fallback(query: str, entities: list[Entity]) -> QueryUnderstanding:
 async def understand_query(
     query: str, entities: list[Entity], settings: Settings
 ) -> QueryUnderstanding:
-    if not settings.groq_api_key:
-        return _regex_fallback(query, entities)
-
     # Blocking network call - offloaded to a thread so it doesn't stall the
     # rest of the async pipeline (see planning.run_planning for the same fix).
     try:
@@ -131,17 +128,7 @@ async def understand_query(
 
 
 def _llm_classify(query: str, settings: Settings) -> QueryUnderstanding:
-    client = Groq(api_key=settings.groq_api_key)
-    response = client.chat.completions.create(
-        model=settings.groq_model,
-        messages=[
-            {"role": "system", "content": _UNDERSTANDING_SYSTEM_PROMPT},
-            {"role": "user", "content": query},
-        ],
-        temperature=0.0,
-        response_format={"type": "json_object"},
-    )
-    data = json.loads(response.choices[0].message.content)
+    data = json.loads(get_llm(settings).complete(_UNDERSTANDING_SYSTEM_PROMPT, query, json_mode=True))
     return QueryUnderstanding(
         mode=SubjectMode(data["mode"]),
         research_mode=ResearchMode(data.get("research_mode", "general")),

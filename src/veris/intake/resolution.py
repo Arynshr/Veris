@@ -25,6 +25,7 @@ import re
 from collections import Counter
 
 from veris.core.config import Settings, get_logger
+from veris.core.llm import get_llm
 from veris.core.models import (
     QueryUnderstanding,
     ResolvedSubject,
@@ -102,30 +103,20 @@ def _candidate_counts(
 def _llm_pick_singular(
     role: str, organization: str | None, results: list[SearchResult], settings: Settings
 ) -> str | None:
-    """Best-effort precise pick for a single-seat role, used when a Groq key
+    """Best-effort precise pick for a single-seat role, used when an LLM
     is configured. Falls back silently to the frequency-based candidate on
     any failure - never raises."""
-    from groq import Groq
-
     if not results:
         return None
     snippets = "\n".join(f"- {r.title}: {r.snippet}" for r in results[:8])
     org_part = f" at {organization}" if organization else ""
     try:
-        client = Groq(api_key=settings.groq_api_key)
-        response = client.chat.completions.create(
-            model=settings.groq_model,
-            messages=[
-                {"role": "system", "content": _ROLE_EXTRACTION_PROMPT},
-                {
-                    "role": "user",
-                    "content": f"Role: {role}{org_part}\n\nSnippets:\n{snippets}",
-                },
-            ],
-            temperature=0.0,
-            response_format={"type": "json_object"},
+        raw = get_llm(settings).complete(
+            _ROLE_EXTRACTION_PROMPT,
+            f"Role: {role}{org_part}\n\nSnippets:\n{snippets}",
+            json_mode=True,
         )
-        data = json.loads(response.choices[0].message.content)
+        data = json.loads(raw)
         name = (data.get("name") or "").strip()
         if name and data.get("confidence", 0) >= 0.5:
             return name
@@ -204,7 +195,7 @@ async def resolve_subjects(
             continue
 
         chosen: list[str] = []
-        if singular and settings.groq_api_key:
+        if singular:
             picked = await asyncio.to_thread(
                 _llm_pick_singular, role, understanding.organization, results, settings
             )
