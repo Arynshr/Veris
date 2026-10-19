@@ -159,6 +159,7 @@ class SourceRequirement(BaseModel):
 
 
 class ResearchPlan(BaseModel):
+    schema_version: int = 1
     objective: str
     queries: list[SearchQuery]
     source_requirements: list[SourceRequirement] = Field(default_factory=list)
@@ -194,6 +195,7 @@ class SourceMetadata(BaseModel):
 
 
 class Evidence(BaseModel):
+    schema_version: int = 1
     evidence_id: str
     document_id: str
     claim: str
@@ -234,6 +236,7 @@ class Claim(BaseModel):
 
 
 class VerificationResult(BaseModel):
+    schema_version: int = 1
     claim_id: str
     status: VerificationStatus
     subject_match_score: float = Field(
@@ -250,7 +253,16 @@ class VerificationResult(BaseModel):
     )
 
 
+class RetrievalStats(BaseModel):
+    attempted: int = 0
+    fetched: int = 0
+    failed: int = 0
+    paywalled: int = 0
+    snippet_only: int = 0
+
+
 class ResearchRun(BaseModel):
+    schema_version: int = 1
     run_id: str
     query: str
     mode: SubjectMode
@@ -263,6 +275,10 @@ class ResearchRun(BaseModel):
     claims_verified: int = 0
     claims_single_source: int = 0
     claims_conflicted: int = 0
+    queries_run: int = 0
+    providers_used: list[str] = Field(default_factory=list)
+    retrieval: RetrievalStats = Field(default_factory=RetrievalStats)
+    adverse_by_severity: dict[str, int] = Field(default_factory=dict)
     config_hash: str = ""
 
 

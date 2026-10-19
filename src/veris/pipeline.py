@@ -8,14 +8,15 @@ import asyncio
 import shutil
 from collections import Counter
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from veris.analysis import run_evidence_mapping, run_verification
 from veris.analysis.safety import load_safety
 from veris.analysis.sources import load_source_policy
-from veris.analysis.taxonomy import load_taxonomy
+from veris.analysis.taxonomy import UNCATEGORIZED, load_taxonomy
 from veris.core.config import Settings, config_hash, get_logger, get_settings
+from veris.core.llm import LLMError, get_llm
 from veris.core.models import (
     Claim,
     Document,
@@ -27,7 +28,9 @@ from veris.core.models import (
     ResearchMode,
     ResearchRun,
     ResolvedSubject,
+    RetrievalStats,
     SearchResult,
+    Severity,
     SubjectMode,
     VerificationResult,
     VerificationStatus,
@@ -78,6 +81,22 @@ class RunSummary:
         )
 
 
+@dataclass
+class RunCounters:
+    queries: int = 0
+    providers: set[str] = field(default_factory=set)
+    retrieval: RetrievalStats = field(default_factory=RetrievalStats)
+
+
+def _adverse_by_severity(claims: list[Claim]) -> dict[str, int]:
+    counts = Counter(
+        c.severity.value
+        for c in claims
+        if c.categories != [UNCATEGORIZED] and not c.out_of_window and not c.flags
+    )
+    return {s.value: counts[s.value] for s in Severity}
+
+
 def _count_statuses(
     verifications: list[VerificationResult],
 ) -> tuple[int, int, int]:
@@ -116,6 +135,7 @@ async def _run_subject_pipeline(
     collected_evidence: list[Evidence],
     search_cache: dict[str, list[SearchResult]],
     document_cache: dict[str, Document | None],
+    counters: RunCounters,
 ) -> AsyncIterator[PipelineEvent]:
     """PLAN -> SEARCH -> RETRIEVE -> REGISTER -> EVIDENCE -> VERIFY
 
@@ -135,6 +155,7 @@ async def _run_subject_pipeline(
     )
     plan = run_planning(settings, subject=name, research_mode=research_mode)
     store.save_plan(plan, subject=name)
+    counters.queries += len(plan.queries)
     yield _emit(
         store,
         PipelineStage.PLANNING,
@@ -165,6 +186,7 @@ async def _run_subject_pipeline(
     )
     search_results = [r for batch in batches for r in batch]
     store.save_search_results(search_results, subject=name)
+    counters.providers.update(r.provider.value for r in search_results)
     yield _emit(
         store,
         PipelineStage.SEARCH,
@@ -185,6 +207,8 @@ async def _run_subject_pipeline(
         search_results,
         cache=document_cache,
         max_documents=settings.max_documents_per_subject,
+        stats=counters.retrieval,
+        paywall_codes=settings.paywall_status_codes,
     )
     yield _emit(
         store,
@@ -303,6 +327,12 @@ async def stream_research(
         yield _emit(store, PipelineStage.UNDERSTANDING, EventStatus.FAILED, str(exc))
         raise
 
+    try:
+        await asyncio.to_thread(get_llm(settings).validate)
+    except LLMError as exc:
+        yield _emit(store, PipelineStage.UNDERSTANDING, EventStatus.FAILED, str(exc))
+        raise
+
     ingestion = run_ingestion(user_prompt=query, system_prompt=settings.system_prompt)
     store.save_entities(ingestion.entities)
 
@@ -311,6 +341,7 @@ async def stream_research(
     # an identical URL is never re-crawled twice.
     search_cache: dict[str, list[SearchResult]] = {}
     document_cache: dict[str, Document | None] = {}
+    counters = RunCounters()
 
     if resolved_subjects_override:
         understanding = QueryUnderstanding(
@@ -381,6 +412,7 @@ async def stream_research(
                 all_evidence,
                 search_cache,
                 document_cache,
+                counters,
             ):
                 yield event
         except Exception as exc:
@@ -441,6 +473,10 @@ async def stream_research(
                 claims_verified=total_verified,
                 claims_single_source=total_single_source,
                 claims_conflicted=total_conflicted,
+                queries_run=counters.queries,
+                providers_used=sorted(counters.providers),
+                retrieval=counters.retrieval,
+                adverse_by_severity=_adverse_by_severity(all_claims),
                 config_hash=config_hash(settings),
             )
         )

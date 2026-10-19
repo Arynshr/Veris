@@ -8,7 +8,7 @@ from datetime import date
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 MAX_SEARCH_RESULTS_CEILING = 10
@@ -25,8 +25,13 @@ class Settings(BaseSettings):
     firecrawl_api_key: str | None = None
     searxng_base_url: str | None = None
 
-    groq_api_key: str | None = None
-    groq_model: str = "openai/gpt-oss-20b"
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    llm_api_key: SecretStr | None = None
+    llm_base_url: str | None = None
+    llm_timeout_seconds: int = Field(default=60, ge=1)
+    llm_max_tokens: int = Field(default=2048, ge=1)
+    llm_providers_path: Path = PROJECT_ROOT / "config" / "llm_providers.yaml"
 
     max_search_results_per_query: int = Field(
         default=2, ge=1, le=MAX_SEARCH_RESULTS_CEILING
@@ -54,6 +59,9 @@ class Settings(BaseSettings):
     source_tiers_path: Path = PROJECT_ROOT / "config" / "source_tiers.yaml"
     taxonomy_path: Path = PROJECT_ROOT / "config" / "taxonomy.yaml"
     safety_path: Path = PROJECT_ROOT / "config" / "safety.yaml"
+    templates_dir: Path = PROJECT_ROOT / "templates"
+    template_version: str = "v1"
+    paywall_status_codes: list[int] = [401, 402, 403]
     slot_min_chars: int = Field(default=40, ge=1)
     slot_max_chars: int = Field(default=900, ge=1)
     summary_fallback_bullets: int = Field(default=3, ge=1)
@@ -88,11 +96,15 @@ def get_logger(name: str) -> logging.Logger:
 
 
 def config_hash(settings: Settings) -> str:
-    """Stable hash of non-secret settings plus the YAML policy files."""
-    payload = settings.model_dump(
-        mode="json", exclude={k for k in type(settings).model_fields if k.endswith("_api_key")}
-    )
+    """Stable hash of non-secret, non-path settings plus policy YAMLs and templates."""
+    skip = {k for k in type(settings).model_fields if k.endswith(("_api_key", "_path", "_dir"))}
+    payload = settings.model_dump(mode="json", exclude=skip)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode())
     for path in (settings.source_tiers_path, settings.taxonomy_path, settings.safety_path):
         digest.update(Path(path).read_bytes())
+    root = settings.templates_dir / settings.template_version
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            digest.update(path.relative_to(root).as_posix().encode())
+            digest.update(path.read_bytes())
     return digest.hexdigest()[:16]
