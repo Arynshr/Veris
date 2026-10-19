@@ -5,7 +5,7 @@ from collections.abc import Callable
 from pydantic import BaseModel
 
 from veris.core.config import Settings, get_logger
-from veris.core.llm import LLMConfigError, get_llm
+from veris.core.ports import LLM
 from veris.core.models import Claim, SynthesisSlot
 from veris.synthesis.validator import ValidationContext, is_eligible, validate_slot
 
@@ -37,14 +37,9 @@ def sanitize(text: str, limit: int = 260) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
-def slot_llm(settings: Settings) -> SlotLLM | None:
-    try:
-        client = get_llm(settings)
-    except LLMConfigError as exc:
-        logger.warning("slot LLM unavailable, using templated bullets: %s", exc)
-        return None
+def make_slot_llm(llm: LLM) -> SlotLLM:
     schema = SlotResponse.model_json_schema()
-    return lambda system, user: client.complete(system, user, schema=schema)
+    return lambda system, user: llm.complete(system, user, schema=schema)
 
 
 def _user_prompt(instruction: str, data_block: str, slot_ids: list[str], feedback: str) -> str:

@@ -1,223 +1,214 @@
-"""
-Only VERIFIED and SINGLE_SOURCE claims are handed to the model, the latter tagged
-as uncorroborated; CONFLICTED claims are never presented as fact.
-GENERAL mode produces a plain cited research report;
-BACKGROUND_CHECK mode produces an adverse-media
-report grouped subject -> risk category, with an identity/screening disclaimer.
-Body text is rendered from data; the single LLM output is the validated summary slot.
-"""
+"""Canonical report: build `Report` from run data; Markdown is rendered only from it."""
 
-import asyncio
-from collections import defaultdict
+import re
+from datetime import date
+from functools import lru_cache
+from pathlib import Path
+from urllib.parse import quote
 
+from jinja2 import Environment, FileSystemLoader, StrictUndefined
+
+from veris.analysis.taxonomy import UNCATEGORIZED
+from veris.analysis.temporal import window_start
 from veris.core.config import Settings
-from veris.synthesis.slots import SlotLLM, slot_llm
-from veris.synthesis.summary import SUMMARY_SLOT_ID, build_summary_slots
 from veris.core.models import (
-    SynthesisSlot,
+    AppendixRow,
+    CategoryRow,
     Claim,
+    Coverage,
     Evidence,
+    Report,
+    ReportFinding,
+    ReportMeta,
     ResearchMode,
+    ResearchRun,
     ResolvedSubject,
+    Severity,
+    SubjectSection,
+    SynthesisSlot,
     VerificationResult,
     VerificationStatus,
 )
+from veris.synthesis.ordering import claim_relevance, claim_sort_key
 
-_CATEGORY_HEADINGS: dict[str, str] = {
-    "criminal": "Criminal",
-    "regulatory_sanctions": "Regulatory & Sanctions",
-    "litigation": "Legal & Litigation",
-    "financial_crime_fraud": "Financial Crime & Fraud",
-    "corruption_bribery": "Corruption & Bribery",
-    "esg_labor_safety": "ESG, Labor & Safety",
-    "reputational": "Reputational & Other",
-}
-_UNDATED_TAG = "(undated)"
-
-_SINGLE_SOURCE_TAG = "(single source, uncorroborated)"
-
-_SCREENING_DISCLAIMER = (
-    "> **Screening aid only.** Findings below are drawn from public web sources and are "
-    "not verified beyond automated subject-name and source-quality checks. Common names "
-    "can produce false matches - confirm identity details (role, location, employer) "
-    "before relying on any finding. This is not a legal, credit, or compliance determination."
-)
-
-def _resolution_summary(subjects: list[ResolvedSubject]) -> str:
-    if len(subjects) == 1 and subjects[0].resolution_confidence >= 0.99:
-        return (
-            ""  # single directly-named subject - resolution transparency adds no value
-        )
-    lines = ["## Subjects Covered", ""]
-    for s in subjects:
-        confidence_note = (
-            "given directly"
-            if s.resolution_confidence >= 0.99
-            else f"resolved via search, confidence {s.resolution_confidence:.1f}"
-        )
-        role_note = f" — {s.role}" if s.role else ""
-        lines.append(f"- **{s.name}**{role_note} ({confidence_note})")
-    lines.append("")
-    return "\n".join(lines)
+_MD_SPECIAL = re.compile(r"([\\`*_\[\]<>|])")
+_URL_SAFE = ":/?#[]@!$&'()*+,;=%~-._"
+_Item = tuple[Claim, VerificationResult, list[Evidence]]
 
 
-def _grouped_by_subject_category(
-    claims: list[Claim],
-    verifications: list[VerificationResult],
-    evidence_list: list[Evidence],
-) -> dict[str, list[tuple[Claim, Evidence]]]:
-    """subject -> [(claim, representative evidence)], sorted by evidence
-    relevance_score descending. Uncorroborated claims carry a visible tag."""
-    evidence_by_id = {e.evidence_id: e for e in evidence_list}
-    claim_by_id = {c.claim_id: c for c in claims}
-    reportable = {
-        v.claim_id: v.status
-        for v in verifications
-        if v.status != VerificationStatus.CONFLICTED
-    }
-
-    grouped: dict[str, list[tuple[Claim, Evidence]]] = defaultdict(list)
-    for claim_id, status in reportable.items():
-        claim = claim_by_id.get(claim_id)
-        ev = next(
-            (
-                evidence_by_id[i]
-                for i in (claim.evidence_ids if claim else [])
-                if i in evidence_by_id and not evidence_by_id[i].flags
-            ),
-            None,
-        )
-        if not claim or not ev or claim.out_of_window or claim.flags:
-            continue
-        if claim.undated:
-            claim = claim.model_copy(update={"text": f"{claim.text} {_UNDATED_TAG}"})
-        if status == VerificationStatus.SINGLE_SOURCE:
-            claim = claim.model_copy(
-                update={"text": f"{claim.text} {_SINGLE_SOURCE_TAG}"}
-            )
-        grouped[claim.subject].append((claim, ev))
-    for subject in grouped:
-        grouped[subject].sort(key=lambda pair: pair[1].relevance_score, reverse=True)
-    return grouped
+def _esc(value: object) -> str:
+    return _MD_SPECIAL.sub(r"\\\1", " ".join(str(value).split()))
 
 
-def _build_sources_block(evidence_items: list[Evidence]) -> str:
-    seen: dict[str, int] = {}
-    lines = []
-    for ev in evidence_items:
-        key = ev.source_metadata.url
-        if key not in seen:
-            seen[key] = len(seen) + 1
-            lines.append(f"[S{seen[key]}] {ev.source_metadata.title} - {key}")
-    return "\n".join(lines)
+def _url(value: str) -> str:
+    return f"<{quote(value.strip(), safe=_URL_SAFE)}>"
 
 
-def _render_general_report(
-    subjects: list[ResolvedSubject],
-    grouped: dict[str, list[tuple[Claim, Evidence]]],
-    summary_md: str,
-) -> str:
-    lines = ["# Research Report", ""]
-    resolution = _resolution_summary(subjects)
-    if resolution:
-        lines.append(resolution)
-    if summary_md:
-        lines.append(summary_md)
-    all_evidence: list[Evidence] = []
-    for subject in subjects:
-        items = grouped.get(subject.name, [])
-        if len(subjects) > 1:
-            lines.append(f"## {subject.name}")
-        if not items:
-            lines.append("_No findings passed verification for this subject._\n")
-            continue
-        for claim, ev in items:
-            all_evidence.append(ev)
-            lines.append(
-                f"- {claim.text} ({ev.source_metadata.source}, {ev.source_metadata.url})"
-            )
-        lines.append("")
-    lines.append("## Sources")
-    lines.append(_build_sources_block(all_evidence))
-    return "\n".join(lines)
+@lru_cache
+def _env(root: Path) -> Environment:
+    env = Environment(
+        loader=FileSystemLoader(root),
+        autoescape=False,
+        undefined=StrictUndefined,
+        trim_blocks=True,
+        lstrip_blocks=True,
+        keep_trailing_newline=True,
+    )
+    env.filters.update(esc=_esc, url=_url)
+    return env
 
 
-def _render_background_check_report(
-    subjects: list[ResolvedSubject],
-    grouped: dict[str, list[tuple[Claim, Evidence]]],
-    summary_md: str,
-) -> str:
-    lines = [
-        "# Background Check Report",
-        "",
-        _SCREENING_DISCLAIMER,
-        "",
-        _resolution_summary(subjects),
-        summary_md,
-    ]
-    all_evidence: list[Evidence] = []
-    for subject in subjects:
-        items = grouped.get(subject.name, [])
-        lines.append(f"## {subject.name}")
-        if not items:
-            lines.append(
-                "_No adverse findings passed verification for this subject._\n"
-            )
-            continue
-        by_category: dict[str, list[tuple[Claim, Evidence]]] = defaultdict(list)
-        for claim, ev in items:
-            for cat in claim.categories:
-                by_category[cat].append((claim, ev))
-        for category, heading in _CATEGORY_HEADINGS.items():
-            cat_items = by_category.get(category, [])
-            if not cat_items:
-                continue
-            lines.append(f"### {heading}")
-            for claim, ev in cat_items:
-                all_evidence.append(ev)
-                lines.append(
-                    f"- {claim.text} (reported by {ev.source_metadata.source}, {ev.source_metadata.url})"
-                )
-            lines.append("")
-    lines.append("## Sources")
-    lines.append(_build_sources_block(all_evidence))
-    return "\n".join(lines)
+def render_markdown(report: Report, settings: Settings) -> str:
+    root = settings.templates_dir / report.template_version
+    if not root.is_dir():
+        raise FileNotFoundError(f"Report templates not found: {root}")
+    return _env(root).get_template("report.md.j2").render(r=report.model_dump(mode="json"))
 
 
-def _render_summary(slots: list[SynthesisSlot]) -> str:
-    if not slots:
-        return ""
-    lines = ["## Executive Summary", ""]
-    for slot in slots:
-        cite = f"(claims: {', '.join(slot.claim_ids)})"
-        bullet = "" if slot.slot_id == SUMMARY_SLOT_ID else "- "
-        lines.append(f"{bullet}{slot.text} {cite}")
-    lines.append("")
-    return "\n".join(lines)
+def _no_findings_note(adverse: bool, attempted: int, fetched: int, degraded: list[str]) -> str:
+    what = "adverse findings" if adverse else "findings"
+    if not attempted:
+        return f"No {what} in retrieved sources; no sources could be retrieved."
+    if attempted > fetched:
+        return f"No {what} in retrieved sources; {attempted - fetched} sources could not be retrieved."
+    if degraded:
+        return f"No {what} in retrieved sources; coverage was incomplete (see Coverage)."
+    return f"No {what} in the {fetched} sources retrieved."
 
 
-async def run_synthesis(
+def _finding(claim: Claim, verdict: VerificationResult, evidence: Evidence) -> ReportFinding:
+    return ReportFinding(
+        claim_id=claim.claim_id,
+        text=claim.text,
+        categories=claim.categories,
+        legal_status=claim.legal_status,
+        severity=claim.severity,
+        verification=verdict.status,
+        event_date=claim.event_date,
+        undated=claim.undated,
+        source=evidence.source_metadata.source,
+        url=evidence.source_metadata.url,
+        conflicts_with=sorted(verdict.conflicts_with),
+    )
+
+
+def _passage(text: str, limit: int) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def build_report(
+    run: ResearchRun,
     subjects: list[ResolvedSubject],
     claims: list[Claim],
     verifications: list[VerificationResult],
     evidence_list: list[Evidence],
+    retrieved_at: dict[str, str],
     settings: Settings,
-    research_mode: ResearchMode = ResearchMode.GENERAL,
-    llm: SlotLLM | None = None,
-) -> str:
-    """Body is rendered from data; the only model output is the validated summary slot."""
-    llm = llm or slot_llm(settings)
+    summary: SynthesisSlot | None,
+    category_order: list[str],
+) -> Report:
+    as_of = settings.as_of_date or date.today()
+    evidence_by_id = {e.evidence_id: e for e in evidence_list}
+    verdicts = {v.claim_id: v for v in verifications}
+    adverse_mode = run.research_mode == ResearchMode.BACKGROUND_CHECK
 
-    def build() -> str:
-        grouped = _grouped_by_subject_category(claims, verifications, evidence_list)
-        summary_md = _render_summary(
-            build_summary_slots(claims, verifications, evidence_list, settings, llm)
-        )
-        render = (
-            _render_background_check_report
-            if research_mode == ResearchMode.BACKGROUND_CHECK
-            else _render_general_report
-        )
-        return render(subjects, grouped, summary_md)
+    items: list[_Item] = []
+    out_of_window = excluded_identity = excluded_unsupported = 0
+    for claim in claims:
+        verdict = verdicts.get(claim.claim_id)
+        clean = [evidence_by_id[i] for i in claim.evidence_ids if i in evidence_by_id and not evidence_by_id[i].flags]
+        if claim.out_of_window:
+            out_of_window += 1
+        elif claim.flags or not clean or verdict is None:
+            excluded_unsupported += 1
+        elif verdict.status == VerificationStatus.CONFLICTED and not verdict.conflicts_with:
+            excluded_identity += 1
+        elif not (adverse_mode and claim.categories == [UNCATEGORIZED]):
+            items.append((claim, verdict, clean))
+    items.sort(key=lambda t: claim_sort_key(t[0], claim_relevance(t[0], evidence_by_id)))
 
-    return await asyncio.to_thread(build)
+    only_direct = len(subjects) == 1 and subjects[0].resolution_confidence >= 0.99
+    sections: list[SubjectSection] = []
+    category_rows: list[CategoryRow] = []
+    appendix: list[AppendixRow] = []
+    for subject in subjects:
+        mine = [t for t in items if t[0].subject == subject.name]
+        established = [t for t in mine if t[1].status != VerificationStatus.CONFLICTED]
+        disputed = [t for t in mine if t[1].status == VerificationStatus.CONFLICTED]
+        if subject.resolution_confidence >= 0.99:
+            note = "" if only_direct else "given directly"
+        else:
+            note = f"resolved via search, confidence {subject.resolution_confidence:.1f}"
+        sections.append(
+            SubjectSection(
+                name=subject.name,
+                role=subject.role,
+                resolution_note=note,
+                findings=[_finding(c, v, e[0]) for c, v, e in established],
+                disputed=[_finding(c, v, e[0]) for c, v, e in disputed],
+            )
+        )
+        for category in category_order:
+            rows = [t for t in established if category in t[0].categories]
+            if rows:
+                count = lambda sev: sum(1 for t in rows if t[0].severity == sev)  # noqa: E731
+                category_rows.append(
+                    CategoryRow(
+                        subject=subject.name,
+                        category=category,
+                        high=count(Severity.HIGH),
+                        medium=count(Severity.MEDIUM),
+                        low=count(Severity.LOW),
+                        claim_ids=[t[0].claim_id for t in rows],
+                    )
+                )
+        for claim, verdict, clean in established + disputed:
+            appendix += [
+                AppendixRow(
+                    claim_id=claim.claim_id,
+                    passage=_passage(e.supporting_passage, settings.report_passage_max_chars),
+                    url=e.source_metadata.url,
+                    retrieved_at=retrieved_at.get(e.document_id, ""),
+                    status=verdict.status,
+                )
+                for e in clean
+            ]
+
+    dates = [c.event_date for c, _, _ in items if c.event_date]
+    retrieval = run.retrieval
+    coverage = Coverage(
+        queries_run=run.queries_run,
+        providers_used=run.providers_used,
+        retrieval=retrieval,
+        sources_registered=run.sources_retrieved,
+        unretrieved=max(retrieval.attempted - retrieval.fetched, 0),
+        earliest_event=min(dates, default=None),
+        latest_event=max(dates, default=None),
+        lookback_years=settings.lookback_years,
+        window_start=window_start(as_of, settings.lookback_years),
+        as_of=as_of,
+        claims_total=len(claims),
+        claims_reported=len(items),
+        out_of_window=out_of_window,
+        undated=sum(1 for c, _, _ in items if c.undated),
+        excluded_identity=excluded_identity,
+        excluded_unsupported=excluded_unsupported,
+        degraded=run.degraded,
+        no_findings_note=_no_findings_note(adverse_mode, retrieval.attempted, retrieval.fetched, run.degraded),
+    )
+    return Report(
+        template_version=settings.template_version,
+        run_id=run.run_id,
+        config_hash=run.config_hash,
+        meta=ReportMeta(
+            query=run.query,
+            research_mode=run.research_mode,
+            min_independent_domains=settings.min_independent_domains,
+        ),
+        summary=summary,
+        subjects=sections,
+        category_rows=category_rows,
+        appendix=appendix,
+        coverage=coverage,
+    )
