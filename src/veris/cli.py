@@ -29,7 +29,9 @@ from veris.core.config import (
     configure_logging,
     get_settings,
 )
-from veris.core.llm import LLMError, load_providers, missing_llm_fields
+from veris.core.config import USER_ENV_PATH
+from veris.core.credentials import save_llm_settings
+from veris.core.llm import LLMError, get_llm, load_providers, missing_llm_fields
 from veris.core.models import (
     EventStatus,
     PipelineStage,
@@ -49,7 +51,7 @@ app = typer.Typer(
 
 **Quick start**
 
-1. Put your keys in a `.env` file: `LLM_PROVIDER`, `LLM_MODEL`, `LLM_API_KEY` (run `veris providers` to see the choices) and one search key: `TAVILY_API_KEY`, `FIRECRAWL_API_KEY` or `SEARXNG_BASE_URL`.
+1. Run `veris init` once to pick an LLM provider and model and save your key (or set `LLM_PROVIDER`, `LLM_MODEL`, `LLM_API_KEY` in the environment or a `.env` file; `veris providers` lists the choices). Add one search key: `TAVILY_API_KEY`, `FIRECRAWL_API_KEY` or `SEARXNG_BASE_URL`.
 2. Run `veris research "your topic"`.
 3. Open `report.md`. Use `veris inspect RUN_ID` to see what was found and `veris sources RUN_ID` for the pages used.
 
@@ -79,7 +81,20 @@ def _print_event(event) -> None:
     )
 
 
+def _rebuild(settings, updates: dict):
+    return type(settings)(**{**settings.model_dump(), **updates})
+
+
+def _check_llm(settings) -> None:
+    try:
+        get_llm(settings).validate()
+    except LLMError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+
+
 def _ensure_llm(settings):
+    """Use configured values (flags, env, .env files); prompt only for what is missing, once."""
     try:
         missing = missing_llm_fields(settings)
         providers = sorted(load_providers(settings.llm_providers_path).providers)
@@ -90,26 +105,33 @@ def _ensure_llm(settings):
         return settings
     if not sys.stdin.isatty():
         console.print(
-            "[red]LLM not configured.[/red] Set "
+            "[red]LLM not configured.[/red] Run `veris init` once, or set "
             + ", ".join(m.upper() for m in missing)
-            + " (env/.env) or pass --provider/--model."
+            + " in the environment or a .env file."
         )
         raise typer.Exit(code=1)
-    rebuild = lambda u: type(settings)(**{**settings.model_dump(), **u})  # noqa: E731
+    console.print(
+        "[yellow]LLM is not configured.[/yellow] Checked environment variables and .env files "
+        f"(current folder, project folder, {USER_ENV_PATH})."
+    )
     updates: dict = {}
     if "llm_provider" in missing:
         updates["llm_provider"] = typer.prompt("LLM provider", type=click.Choice(providers))
     if "llm_model" in missing:
         updates["llm_model"] = typer.prompt("Model id")
     try:
-        for name in missing_llm_fields(rebuild(updates)):
+        for name in missing_llm_fields(_rebuild(settings, updates)):
             updates[name] = typer.prompt(
                 "API key" if name == "llm_api_key" else "Base URL", hide_input=name == "llm_api_key"
             )
     except LLMError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
-    return rebuild(updates)
+    settings = _rebuild(settings, updates)
+    _check_llm(settings)
+    if typer.confirm(f"Save these LLM settings to {USER_ENV_PATH} so you are not asked again?", default=True):
+        console.print(f"[green]Saved to {save_llm_settings(settings)}[/green] (owner-only permissions).")
+    return settings
 
 
 @app.command()
@@ -306,6 +328,38 @@ def research(
     )
     if degraded:
         console.print("[yellow]Completed with warnings:[/yellow] " + ", ".join(degraded))
+
+
+@app.command()
+def init() -> None:
+    """Set up your LLM once: pick a provider and model, check the key, and save it for future runs."""
+    if not sys.stdin.isatty():
+        console.print("[red]`veris init` needs an interactive terminal.[/red] In scripts, set LLM_PROVIDER, LLM_MODEL and LLM_API_KEY.")
+        raise typer.Exit(code=1)
+    settings = get_settings()
+    try:
+        registry = load_providers(settings.llm_providers_path).providers
+    except LLMError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    provider = typer.prompt("LLM provider", type=click.Choice(sorted(registry)), default=settings.llm_provider)
+    spec = registry[provider]
+    updates: dict = {
+        "llm_provider": provider,
+        "llm_model": typer.prompt("Model id", default=settings.llm_model),
+    }
+    if not spec.base_url:
+        updates["llm_base_url"] = typer.prompt("Base URL", default=settings.llm_base_url)
+    if spec.key_required:
+        current = settings.llm_api_key.get_secret_value() if settings.llm_api_key else ""
+        label = "API key (Enter keeps the current one)" if current else "API key"
+        updates["llm_api_key"] = (
+            typer.prompt(label, default="", hide_input=True, show_default=False) or current
+        )
+    settings = _rebuild(settings, updates)
+    _check_llm(settings)
+    console.print(f"[green]Saved to {save_llm_settings(settings)}[/green] (owner-only permissions).")
+    console.print("Environment variables and .env files still override this file.")
 
 
 @app.command()

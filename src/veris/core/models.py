@@ -263,6 +263,7 @@ class RetrievalStats(BaseModel):
     robots_blocked: int = 0
     memory_skipped: int = 0
     snippet_only: int = 0
+    sample_errors: list[str] = Field(default_factory=list)
 
 
 class ResearchRun(BaseModel):

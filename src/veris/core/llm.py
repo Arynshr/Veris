@@ -362,3 +362,16 @@ def get_llm(settings: Settings) -> LLMClient:
     if key not in _clients:
         _clients[key] = LLMClient(cfg)
     return _clients[key]
+
+
+class NullLLM:
+    """Always unavailable; callers fall back to their deterministic paths (offline runs, tests)."""
+
+    def __init__(self) -> None:
+        self.failures: list[str] = []
+
+    def complete(self, system: str, user: str, *, schema: dict | None = None, json_mode: bool = False) -> str:
+        raise LLMError("LLM disabled")
+
+    def complete_json(self, system: str, user: str, *, schema: dict | None = None) -> dict:
+        raise LLMError("LLM disabled")

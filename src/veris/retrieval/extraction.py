@@ -6,22 +6,36 @@ from collections.abc import Collection
 from veris.core.config import Settings, get_logger
 from veris.core.documents import build_document, canonicalize_url
 from veris.core.models import Document, RetrievalStats, SearchResult
-from veris.core.ports import Extractor, FetchOutcome, FetchResult
+from veris.core.ports import Extractor, ExtractorUnavailable, FetchOutcome, FetchResult
 from veris.retrieval.crawl_policy import CrawlGuard
 
 logger = get_logger(__name__)
 
 _RETRYABLE = {FetchOutcome.TIMEOUT, FetchOutcome.ERROR}
+_MAX_SAMPLE_ERRORS = 3
 _STAT_FIELD = {
     "error": "failed",
     "empty": "failed",
     "rate_limited": "failed",
+    "unavailable": "failed",
     "timeout": "timed_out",
     "forbidden": "access_denied",
     "paywalled": "paywalled",
     "robots_blocked": "robots_blocked",
     "memory_skipped": "memory_skipped",
 }
+
+
+def _launch_hint(exc: Exception) -> str:
+    text = str(exc)
+    if "Executable doesn't exist" in text or "playwright install" in text:
+        return (
+            "The browser used for page extraction is not installed. "
+            "Run `crawl4ai-setup` (or `python -m playwright install chromium`) in this environment, then retry."
+        )
+    if "missing dependencies" in text.lower():
+        return "The browser is missing system libraries. Run `python -m playwright install-deps chromium`, then retry."
+    return f"Could not start the extraction browser: {text.splitlines()[0][:200] if text else type(exc).__name__}"
 
 
 class Crawl4AIExtractor:
@@ -40,14 +54,36 @@ class Crawl4AIExtractor:
         self._sem = asyncio.Semaphore(concurrency)
         self._start_lock = asyncio.Lock()
         self._crawler = None
+        self._checked = False
+
+    async def check(self) -> None:
+        """Launch and close a headless browser once, so a broken install fails before any spend."""
+        if self._checked:
+            return
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError as exc:
+            raise ExtractorUnavailable("crawl4ai is not installed. Run `pip install crawl4ai`, then `crawl4ai-setup`.") from exc
+        try:
+            async with async_playwright() as pw:
+                browser = await pw.chromium.launch(headless=True)
+                await browser.close()
+        except Exception as exc:  # noqa: BLE001
+            raise ExtractorUnavailable(_launch_hint(exc)) from exc
+        self._checked = True
 
     async def _ensure(self):
         async with self._start_lock:
             if self._crawler is None:
-                from crawl4ai import AsyncWebCrawler, BrowserConfig
+                try:
+                    from crawl4ai import AsyncWebCrawler, BrowserConfig
 
-                crawler = AsyncWebCrawler(config=BrowserConfig(user_agent=self._ua, verbose=False))
-                await crawler.start()
+                    crawler = AsyncWebCrawler(config=BrowserConfig(user_agent=self._ua, verbose=False))
+                    await crawler.start()
+                except ImportError as exc:
+                    raise ExtractorUnavailable("crawl4ai is not installed. Run `pip install crawl4ai`.") from exc
+                except Exception as exc:  # noqa: BLE001
+                    raise ExtractorUnavailable(_launch_hint(exc)) from exc
                 self._crawler = crawler
         return self._crawler
 
@@ -64,6 +100,8 @@ class Crawl4AIExtractor:
             try:
                 crawler = await self._ensure()
                 result = await asyncio.wait_for(crawler.arun(url=url), self._timeout)
+            except ExtractorUnavailable as exc:
+                return FetchResult(outcome=FetchOutcome.UNAVAILABLE, detail=str(exc)[:200])
             except asyncio.TimeoutError:
                 return FetchResult(outcome=FetchOutcome.TIMEOUT, detail=f"timed out after {self._timeout}s")
             except Exception as exc:  # noqa: BLE001
@@ -110,20 +148,21 @@ async def _fetch_with_retry(extractor: Extractor, r: SearchResult, retries: int)
 
 async def _retrieve_one(
     r: SearchResult, extractor: Extractor, guard: CrawlGuard, retries: int
-) -> tuple[Document | None, str]:
+) -> tuple[Document | None, str, str]:
     try:
         if blocked := await guard.check(r.url):
             reason, remembered = blocked
             logger.info("Skipping %s (%s)", r.url, reason.value)
-            return None, "memory_skipped" if remembered else "robots_blocked"
+            return None, "memory_skipped" if remembered else "robots_blocked", reason.value
         result = await _fetch_with_retry(extractor, r, retries)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Retrieval failed for %s: %s", r.url, exc)
-        return None, "error"
+        return None, "error", f"{type(exc).__name__}: {exc}"[:200]
     guard.record(r.url, result.outcome)
     if result.outcome is not FetchOutcome.OK:
-        logger.info("Not retrieved %s: %s %s", r.url, result.outcome.value, result.detail)
-    return result.document, result.outcome.value
+        log = logger.warning if result.outcome in (FetchOutcome.ERROR, FetchOutcome.UNAVAILABLE) else logger.info
+        log("Not retrieved %s: %s %s", r.url, result.outcome.value, result.detail)
+    return result.document, result.outcome.value, result.detail
 
 
 async def retrieve_documents(
@@ -162,7 +201,7 @@ async def retrieve_documents(
     outcomes = await asyncio.gather(*(_retrieve_one(r, extractor, guard, retries) for r in to_fetch))
 
     fresh_docs: list[Document] = []
-    for r, (doc, outcome) in zip(to_fetch, outcomes):
+    for r, (doc, outcome, detail) in zip(to_fetch, outcomes):
         if cache is not None:
             cache[canonicalize_url(r.url)] = doc
         if stats is not None:
@@ -173,6 +212,9 @@ async def retrieve_documents(
                 field = _STAT_FIELD[outcome]
                 setattr(stats, field, getattr(stats, field) + 1)
                 stats.snippet_only += bool(r.snippet.strip())
+                sample = detail.strip()[:120]
+                if sample and sample not in stats.sample_errors and len(stats.sample_errors) < _MAX_SAMPLE_ERRORS:
+                    stats.sample_errors.append(sample)
         if doc is not None:
             fresh_docs.append(doc)
 

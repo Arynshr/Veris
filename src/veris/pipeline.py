@@ -17,7 +17,7 @@ from veris.analysis.sources import load_source_policy
 from veris.analysis.taxonomy import UNCATEGORIZED, load_taxonomy
 from veris.core.config import Settings, config_hash, get_logger, get_settings
 from veris.core.llm import LLMError, get_llm
-from veris.core.ports import Extractor
+from veris.core.ports import LLM, Extractor, ExtractorUnavailable
 from veris.core.models import (
     Claim,
     Document,
@@ -94,11 +94,16 @@ class RunCounters:
     empty_searches: list[str] = field(default_factory=list)
 
 
+def _failures(llm: LLM) -> list[str]:
+    return list(getattr(llm, "failures", []))
+
+
 def _degraded(counters: RunCounters, llm_failures: list[str]) -> list[str]:
     items = {f"search_provider_failed:{f.split(':', 1)[0]}" for f in counters.search_failures}
     items |= {f"search_no_results:{name}" for name in counters.empty_searches}
     if counters.retrieval.attempted and not counters.retrieval.fetched:
         items.add("retrieval_no_documents")
+        items |= {f"retrieval_error:{e}" for e in counters.retrieval.sample_errors}
     items |= {f"llm_failed:{f[:100]}" for f in llm_failures}
     return sorted(items)
 
@@ -336,6 +341,9 @@ async def stream_research(
     run_id: str | None = None,
     resolved_subjects_override: list[ResolvedSubject] | None = None,
     research_mode_override: ResearchMode | None = None,
+    llm: LLM | None = None,
+    extractor: Extractor | None = None,
+    guard: CrawlGuard | None = None,
 ) -> AsyncIterator[PipelineEvent]:
     settings = settings or get_settings()
     store = RunPersistence(settings, run_id=run_id)
@@ -358,13 +366,20 @@ async def stream_research(
         raise
 
     try:
-        llm = get_llm(settings)
-        await asyncio.to_thread(llm.validate)
+        if llm is None:
+            llm = get_llm(settings)
+            await asyncio.to_thread(llm.validate)
     except LLMError as exc:
         yield _emit(store, PipelineStage.UNDERSTANDING, EventStatus.FAILED, str(exc))
         raise
 
-    llm_failures_start = len(llm.failures)
+    extractor = extractor or build_extractor(settings)
+    try:
+        await extractor.check()
+    except ExtractorUnavailable as exc:
+        yield _emit(store, PipelineStage.UNDERSTANDING, EventStatus.FAILED, str(exc))
+        raise
+    llm_failures_start = len(_failures(llm))
     ingestion = run_ingestion(user_prompt=query, system_prompt=settings.system_prompt)
     store.save_entities(ingestion.entities)
 
@@ -374,8 +389,7 @@ async def stream_research(
     search_cache: dict[str, list[SearchResult]] = {}
     document_cache: dict[str, Document | None] = {}
     counters = RunCounters()
-    guard = CrawlGuard(settings)
-    extractor = build_extractor(settings)
+    guard = guard or CrawlGuard(settings)
 
     if resolved_subjects_override:
         understanding = QueryUnderstanding(
@@ -486,7 +500,7 @@ async def stream_research(
     yield _emit(
         store, PipelineStage.OUTPUT, EventStatus.STARTED, "Writing report to disk"
     )
-    degraded = _degraded(counters, llm.failures[llm_failures_start:])
+    degraded = _degraded(counters, _failures(llm)[llm_failures_start:])
     run_record = ResearchRun(
         run_id=store.run_id,
         query=query,

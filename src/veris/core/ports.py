@@ -24,6 +24,11 @@ class FetchOutcome(str, Enum):
     FORBIDDEN = "forbidden"
     PAYWALLED = "paywalled"
     RATE_LIMITED = "rate_limited"
+    UNAVAILABLE = "unavailable"
+
+
+class ExtractorUnavailable(RuntimeError):
+    """The extraction backend cannot run at all (e.g. browser not installed)."""
 
 
 class FetchResult(BaseModel):
@@ -34,6 +39,8 @@ class FetchResult(BaseModel):
 
 
 class Extractor(Protocol):
+    async def check(self) -> None: ...
+
     async def fetch(self, url: str, title_hint: str = "") -> FetchResult: ...
 
     async def close(self) -> None: ...

@@ -20,6 +20,7 @@ dependencies = [
     "tavily-python>=0.5",
     "crawl4ai>=0.4",
     "scikit-learn>=1.5",
+    "protego>=0.7.0",
 ]
 
 [project.scripts]

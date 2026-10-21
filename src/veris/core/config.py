@@ -8,16 +8,30 @@ from datetime import date
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 MAX_SEARCH_RESULTS_CEILING = 10
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
+def _user_dir() -> Path:
+    try:
+        return Path.home() / ".veris"
+    except RuntimeError:
+        return PROJECT_ROOT / ".veris"
+
+
+USER_CONFIG_DIR = _user_dir()
+USER_ENV_PATH = USER_CONFIG_DIR / ".env"
+
+
 class Settings(BaseSettings):
+    # Precedence (highest first): init args/CLI flags > process env > ./.env > <project>/.env > ~/.veris/.env
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=(USER_ENV_PATH, PROJECT_ROOT / ".env", ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
     )
 
     # Search providers
@@ -32,6 +46,21 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = Field(default=60, ge=1)
     llm_max_tokens: int = Field(default=2048, ge=1)
     llm_providers_path: Path = PROJECT_ROOT / "config" / "llm_providers.yaml"
+    # Deprecated: GROQ_API_KEY / GROQ_MODEL map to LLM_* when no provider is configured.
+    groq_api_key: SecretStr | None = None
+    groq_model: str | None = None
+
+    @model_validator(mode="after")
+    def _migrate_legacy_groq(self) -> "Settings":
+        if self.groq_api_key and not (self.llm_provider or self.llm_api_key):
+            logging.getLogger(__name__).warning(
+                "GROQ_API_KEY/GROQ_MODEL are deprecated; set LLM_PROVIDER, LLM_MODEL and LLM_API_KEY "
+                "(or run `veris init`)."
+            )
+            self.llm_provider = "groq"
+            self.llm_api_key = self.groq_api_key
+            self.llm_model = self.llm_model or self.groq_model or "openai/gpt-oss-20b"
+        return self
 
     max_search_results_per_query: int = Field(
         default=2, ge=1, le=MAX_SEARCH_RESULTS_CEILING
