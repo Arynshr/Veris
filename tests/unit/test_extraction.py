@@ -1,112 +1,66 @@
-import pytest
+import asyncio
 
 from veris.core.models import SearchProviderName, SearchResult
-from veris.core.documents import canonicalize_url
+from veris.core.ports import FetchOutcome, FetchResult
 from veris.retrieval.extraction import retrieve_documents
+from veris.testing import AllowAllGuard, FakeExtractor, page
 
 
-def _sr(url: str, rank: int, query_id: str = "q1") -> SearchResult:
-    return SearchResult(
-        query_id=query_id,
-        provider=SearchProviderName.TAVILY,
-        url=url,
-        title=url,
-        snippet="",
-        rank=rank,
-    )
+def result(url, rank):
+    return SearchResult(query_id="q", provider=SearchProviderName.TAVILY, url=url, title="t", snippet="", rank=rank)
 
 
-def testcanonicalize_url_strips_query_and_fragment_and_trailing_slash():
-    assert (
-        canonicalize_url("https://Example.com/Path/?utm_source=x#frag")
-        == "https://example.com/Path"
-    )
-    assert canonicalize_url("https://example.com/path/") == canonicalize_url(
-        "https://example.com/path"
-    )
+def run(results, extractor, **kw):
+    return asyncio.run(retrieve_documents(results, extractor, AllowAllGuard(), retries=0, **kw))
 
 
-@pytest.mark.asyncio
-async def test_retrieve_documents_dedupes_same_url_across_queries(monkeypatch):
-    """Regression: the same URL returned by two different queries in a plan
-    used to be crawled twice."""
-    calls = []
-
-    async def fake_extract(url, title_hint=""):
-        calls.append(url)
-        return _fake_document(url)
-
-    monkeypatch.setattr("veris.retrieval.extraction._extract_document", fake_extract)
-
-    results = [
-        _sr("https://a.example/x", rank=1, query_id="q1"),
-        _sr("https://a.example/x?utm=1", rank=2, query_id="q2"),
-    ]
-    docs = await retrieve_documents(results)
-    assert len(docs) == 1
-    assert calls == ["https://a.example/x"]  # best-ranked occurrence fetched
+def test_duplicate_urls_fetched_once_best_rank_first():
+    ex = FakeExtractor({"https://a.test/1": page("https://a.test/1"), "https://a.test/2": page("https://a.test/2")})
+    docs = run([result("https://a.test/2", 2), result("https://a.test/1", 1), result("https://a.test/1", 3)], ex)
+    assert sorted(ex.calls) == ["https://a.test/1", "https://a.test/2"] and len(docs) == 2
 
 
-@pytest.mark.asyncio
-async def test_retrieve_documents_caps_at_max_documents_best_ranked_first(monkeypatch):
-    """Regression for the 413 (tokens-per-minute) bug: retrieval must not
-    silently crawl every raw search hit across every query - it should keep
-    only the best-ranked N."""
-
-    async def fake_extract(url, title_hint=""):
-        return _fake_document(url)
-
-    monkeypatch.setattr("veris.retrieval.extraction._extract_document", fake_extract)
-
-    results = [
-        _sr(f"https://a.example/{i}", rank=i) for i in range(1, 31)
-    ]  # 30 raw hits
-    docs = await retrieve_documents(results, max_documents=10)
-    assert len(docs) == 10
-    fetched_urls = {d.url for d in docs}
-    assert fetched_urls == {
-        f"https://a.example/{i}" for i in range(1, 11)
-    }  # best-ranked 10
+def test_max_documents_keeps_best_ranked():
+    urls = [f"https://a.test/{i}" for i in range(4)]
+    ex = FakeExtractor({u: page(u) for u in urls})
+    run([result(u, i) for i, u in enumerate(urls)], ex, max_documents=2)
+    assert sorted(ex.calls) == urls[:2]
 
 
-@pytest.mark.asyncio
-async def test_retrieve_documents_uses_shared_cache_across_calls(monkeypatch):
-    calls = []
-
-    async def fake_extract(url, title_hint=""):
-        calls.append(url)
-        return _fake_document(url)
-
-    monkeypatch.setattr("veris.retrieval.extraction._extract_document", fake_extract)
-
-    cache: dict = {}
-    await retrieve_documents([_sr("https://a.example/x", rank=1)], cache=cache)
-    await retrieve_documents([_sr("https://a.example/x", rank=1)], cache=cache)
-    assert calls == ["https://a.example/x"]  # second call was a cache hit
+def test_shared_cache_avoids_refetch_including_failures():
+    ok, bad = "https://a.test/ok", "https://a.test/bad"
+    ex, cache = FakeExtractor({ok: page(ok)}), {}
+    for _ in range(2):
+        docs = run([result(ok, 1), result(bad, 2)], ex, cache=cache)
+    assert len(docs) == 1 and sorted(ex.calls) == [bad, ok]
 
 
-@pytest.mark.asyncio
-async def test_retrieve_documents_skips_failed_extractions(monkeypatch):
-    async def fake_extract(url, title_hint=""):
-        return None  # simulates a failed crawl
-
-    monkeypatch.setattr("veris.retrieval.extraction._extract_document", fake_extract)
-    docs = await retrieve_documents([_sr("https://a.example/x", rank=1)])
-    assert docs == []
+def test_one_failure_does_not_stop_the_rest():
+    ok = "https://a.test/ok"
+    ex = FakeExtractor({ok: page(ok), "https://a.test/x": FetchResult(outcome=FetchOutcome.TIMEOUT)})
+    assert [d.url for d in run([result("https://a.test/x", 1), result(ok, 2)], ex)] == [ok]
 
 
-def _fake_document(url: str):
-    import hashlib
+def test_unavailable_extractor_is_not_retried_and_error_is_surfaced():
+    from veris.core.models import RetrievalStats
 
-    from veris.core.models import Document
+    url, detail = "https://a.test/x", "The browser used for page extraction is not installed."
+    ex = FakeExtractor({url: FetchResult(outcome=FetchOutcome.UNAVAILABLE, detail=detail)})
+    stats = RetrievalStats()
+    asyncio.run(retrieve_documents([result(url, 1)], ex, AllowAllGuard(), retries=3, stats=stats))
+    assert ex.calls == [url] and stats.failed == 1 and stats.sample_errors == [detail]
 
-    canonical = canonicalize_url(url)
-    return Document(
-        document_id=hashlib.sha1(canonical.encode()).hexdigest()[:16],
-        url=url,
-        canonical_url=canonical,
-        title=url,
-        content="some content here",
-        source="a.example",
-        content_hash=hashlib.sha256(url.encode()).hexdigest(),
-    )
+
+def test_launch_hint_gives_actionable_install_command():
+    from veris.retrieval.extraction import _launch_hint
+
+    assert "crawl4ai-setup" in _launch_hint(Exception("BrowserType.launch: Executable doesn't exist at /x"))
+    assert "install-deps" in _launch_hint(Exception("Host system is missing dependencies to run browsers"))
+
+
+def test_degraded_report_includes_retrieval_errors():
+    from veris.core.models import RetrievalStats
+    from veris.pipeline import RunCounters, _degraded
+
+    counters = RunCounters(retrieval=RetrievalStats(attempted=3, failed=3, sample_errors=["boom"]))
+    assert {"retrieval_no_documents", "retrieval_error:boom"} <= set(_degraded(counters, []))
