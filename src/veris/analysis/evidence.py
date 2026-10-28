@@ -10,9 +10,10 @@ from dataclasses import dataclass
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-from veris.analysis.matching import subject_match_score
-from veris.analysis.taxonomy import load_taxonomy
+from veris.analysis.cleaning import IDENTITY_MISMATCH, NOISE, clean_claim, load_cleaning
+from veris.analysis.matching import name_mentioned, namesake_mentioned, subject_match_score
 from veris.analysis.safety import INSTRUCTION_LIKE, load_safety
+from veris.analysis.taxonomy import load_taxonomy
 from veris.core.config import Settings, get_logger
 from veris.core.ids import stable_id
 from veris.core.models import (
@@ -121,6 +122,12 @@ def _passes_identity_gate(
         < settings.min_subject_name_overlap
     ):
         return False
+    if (
+        settings.reject_namesake_documents
+        and namesake_mentioned(document.content, subject)
+        and not name_mentioned(document.content, subject)
+    ):
+        return False
     if research_mode != ResearchMode.BACKGROUND_CHECK:
         return True
     lowered_subject = subject.lower()
@@ -144,6 +151,7 @@ def run_evidence_mapping(
 ) -> list[Evidence]:
     taxonomy = load_taxonomy(settings.taxonomy_path)
     safety = load_safety(settings.safety_path)
+    cleaning = load_cleaning(settings.cleaning_path)
     context_terms = [e.text for e in entities if e.text]
 
     if research_mode == ResearchMode.BACKGROUND_CHECK:
@@ -163,27 +171,37 @@ def run_evidence_mapping(
         anchors = [
             i for i, s in enumerate(sentences) if len(s.text) >= _MIN_SENTENCE_LEN
         ]
+        cleaned = {i: clean_claim(sentences[i].text, cleaning) for i in anchors}
         if research_mode == ResearchMode.BACKGROUND_CHECK:
             anchors = [
-                i for i in anchors if taxonomy.match_categories(sentences[i].text)
+                i for i in anchors if taxonomy.match_categories(cleaned[i].snippet)
             ]
-            ranked = _rank_by_tfidf([sentences[i].text for i in anchors], query)[
-                :_MAX_EVIDENCE_PER_DOCUMENT
-            ]
+            ranked = _rank_by_tfidf([cleaned[i].snippet for i in anchors], query)
         else:
             ranked = [
                 (pos, score)
                 for pos, score in _rank_by_tfidf(
-                    [sentences[i].text for i in anchors], query
+                    [cleaned[i].snippet for i in anchors], query
                 )
                 if score >= _MIN_RELEVANCE_SCORE_GENERAL
-            ][:_MAX_EVIDENCE_PER_DOCUMENT]
+            ]
+        # Noisy sentences only fill slots clean ones leave free (kept flagged for audit).
+        ranked = sorted(ranked, key=lambda r: cleaned[anchors[r[0]]].noisy)[
+            :_MAX_EVIDENCE_PER_DOCUMENT
+        ]
 
         for pos, score in ranked:
             anchor = anchors[pos]
             sentence = sentences[anchor]
             low, high = bounds = _window_bounds(sentences, anchor, settings)
             passage = document.content[sentences[low].start : sentences[high].end]
+            flags = []
+            if cleaned[anchor].noisy:
+                flags.append(NOISE)
+            if namesake_mentioned(passage, subject) and not name_mentioned(passage, subject):
+                flags.append(IDENTITY_MISMATCH)
+            if safety.matches(passage):
+                flags.append(INSTRUCTION_LIKE)
             evidence_list.append(
                 Evidence(
                     evidence_id=stable_id(
@@ -191,8 +209,9 @@ def run_evidence_mapping(
                     ),
                     document_id=document.document_id,
                     claim=sentence.text,
+                    snippet=cleaned[anchor].snippet,
                     supporting_passage=passage,
-                    flags=[INSTRUCTION_LIKE] if safety.matches(passage) else [],
+                    flags=sorted(flags),
                     subject_context=None
                     if subject_match_score(passage, subject)
                     >= settings.min_subject_name_overlap

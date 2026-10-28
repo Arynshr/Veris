@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from veris.analysis import run_evidence_mapping, run_verification
+from veris.analysis.cleaning import load_cleaning
 from veris.analysis.safety import load_safety
 from veris.analysis.sources import load_source_policy
 from veris.analysis.taxonomy import UNCATEGORIZED, load_taxonomy
@@ -332,6 +333,7 @@ def _validate_policy_files(settings: Settings) -> None:
     load_source_policy(settings.source_tiers_path)
     load_taxonomy(settings.taxonomy_path)
     load_safety(settings.safety_path)
+    load_cleaning(settings.cleaning_path)
 
 
 async def stream_research(

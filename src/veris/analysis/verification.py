@@ -22,7 +22,6 @@ from veris.analysis.sources import (
 from veris.analysis.taxonomy import UNCATEGORIZED, Taxonomy, load_taxonomy
 from veris.analysis.temporal import DateInfo, resolve_dates, window_start
 from veris.core.config import Settings
-from veris.analysis.safety import INSTRUCTION_LIKE
 from veris.core.ids import stable_id
 from veris.core.models import (
     Claim,
@@ -56,7 +55,7 @@ def entity_match_score(text: str, entities: list[Entity]) -> float:
 def _cluster_evidence(
     evidence_list: list[Evidence],
     threshold: float,
-    text_of: Callable[[Evidence], str] = lambda e: e.claim,
+    text_of: Callable[[Evidence], str] = lambda e: e.display_text,
 ) -> list[list[Evidence]]:
     """Greedy single-pass clustering of near-duplicate claim sentences by TF-IDF
     cosine similarity, strongest evidence first so the representative is stable."""
@@ -143,7 +142,7 @@ def _make_claim(
     event = latest.dates.event_date
     return Claim(
         claim_id=f"claim_{stable_id(*sorted(i.evidence.evidence_id for i in items), length=10)}",
-        text=next((i for i in items if not i.evidence.flags), items[0]).evidence.claim,
+        text=next((i for i in items if not i.evidence.flags), items[0]).evidence.display_text,
         subject=subject,
         evidence_ids=[i.evidence.evidence_id for i in items],
         categories=categories,
@@ -153,7 +152,7 @@ def _make_claim(
         published_date=latest.dates.published_date,
         date_source=latest.dates.date_source,
         undated=event is None,
-        flags=[INSTRUCTION_LIKE] if all(i.evidence.flags for i in items) else [],
+        flags=sorted({f for i in items for f in i.evidence.flags}) if all(i.evidence.flags for i in items) else [],
         out_of_window=adverse
         and event is not None
         and event < window_start(as_of, settings.lookback_years),
@@ -173,7 +172,7 @@ def _build_claims(
     disagree splits into one claim per side, linked via the conflicts map."""
     claims: list[Claim] = []
     conflicts: dict[str, list[str]] = {}
-    text_of = (lambda e: taxonomy.strip_cues(e.claim)) if adverse else (lambda e: e.claim)
+    text_of = (lambda e: taxonomy.strip_cues(e.display_text)) if adverse else (lambda e: e.display_text)
     for cluster in _cluster_evidence(
         evidence_list, settings.claim_dedup_similarity, text_of
     ):
