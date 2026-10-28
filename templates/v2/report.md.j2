@@ -1,0 +1,118 @@
+# Research Report
+
+- **Query:** {{ r.meta.query | esc }}
+- **Mode:** {{ r.meta.research_mode | esc }}
+- **Window:** {{ r.coverage.window_start }} to {{ r.coverage.as_of }} ({{ r.coverage.lookback_years }}-year lookback)
+
+## Executive Summary
+
+{% if r.summary %}
+{{ r.summary.text | esc }}{% for id in r.summary_ref_ids %} [{{ id }}]{% endfor %}
+
+{% else %}
+{% if r.subjects | selectattr("findings") | list %}
+See findings below.
+
+{% else %}
+{{ r.coverage.no_findings_note | esc }}
+
+{% endif %}
+{% endif %}
+## Findings
+
+{% for s in r.subjects %}
+### {{ s.name | esc }}{% if s.role %} ({{ s.role | esc }}){% endif %}
+
+
+{% if s.resolution_note %}
+_{{ s.resolution_note | esc }}_
+
+{% endif %}
+{% for f in s.findings %}
+{{ loop.index }}. **{{ f.title | esc }}** · `{{ f.verification }}`{% if f.adverse %} · `{{ f.severity }}`{% endif %}{% if f.undated %} · _undated_{% endif %}
+
+   {{ f.snippet | esc }}{% for id in f.ref_ids %} [{{ id }}]{% endfor %}
+
+{% else %}
+{{ r.coverage.no_findings_note | esc }}
+
+{% endfor %}
+
+{% if s.secondary %}
+_{{ s.secondary | length }} further finding(s) are listed in Appendix A._
+
+{% endif %}
+{% if s.disputed %}
+**Disputed (not established):**
+
+{% for f in s.disputed %}
+- **{{ f.title | esc }}** · `{{ f.verification }}` · conflicts with {{ f.conflicts_with | join(", ") }}: {{ f.snippet | esc }}{% for id in f.ref_ids %} [{{ id }}]{% endfor %}
+
+{% endfor %}
+{% endif %}
+{% endfor %}
+
+{% if r.category_rows %}
+## Category Summary
+
+| Subject | Category | High | Medium | Low |
+|---|---|---|---|---|
+{% for c in r.category_rows %}
+| {{ c.subject | esc }} | {{ c.category | esc }} | {{ c.high }} | {{ c.medium }} | {{ c.low }} |
+{% endfor %}
+
+{% endif %}
+## References
+
+{% for ref in r.references %}
+- **{{ ref.ref_id }}** {{ ref.title | esc }}, {{ ref.domain | esc }} (tier {{ ref.tier }}, {{ ref.source_type | esc }}{% if ref.published_at %}, published {{ ref.published_at }}{% endif %}) {{ ref.url | url }}
+{% else %}
+No sources contributed to this report.
+{% endfor %}
+
+## Appendix A: Secondary Findings
+
+{% for s in r.subjects if s.secondary %}
+### {{ s.name | esc }}
+
+{% for f in s.secondary %}
+{% if loop.changed(f.secondary_reason) %}
+**{{ f.secondary_reason | capitalize }}**
+
+{% endif %}
+- {{ f.title | esc }} · `{{ f.verification }}`: {{ f.snippet | esc }}{% for id in f.ref_ids %} [{{ id }}]{% endfor %}
+
+{% endfor %}
+{% else %}
+None.
+
+{% endfor %}
+## Appendix B: Evidence
+
+| Claim | Passage | Ref | URL | Retrieved | Status |
+|---|---|---|---|---|---|
+{% for row in r.appendix %}
+| {{ row.claim_id | esc }} | {{ row.passage | esc }} | {{ row.ref_id }} | {{ row.url | url }} | {{ row.retrieved_at | esc }} | {{ row.status }} |
+{% endfor %}
+
+## Coverage
+
+{% set c = r.coverage %}
+- Queries run: {{ c.queries_run }}; providers: {{ c.providers_used | join(", ") or "none" }}
+- Documents: {{ c.retrieval.fetched }} fetched, {{ c.retrieval.failed }} failed, {{ c.retrieval.paywalled }} paywalled, {{ c.retrieval.snippet_only }} snippet-only ({{ c.retrieval.attempted }} attempted, {{ c.sources_registered }} registered)
+- Event dates: {{ c.earliest_event or "n/a" }} to {{ c.latest_event or "n/a" }}
+- Claims: {{ c.claims_total }} total, {{ c.claims_reported }} reported ({{ c.claims_secondary }} secondary), {{ c.out_of_window }} out of window, {{ c.undated }} undated
+- Excluded: {{ c.excluded_identity }} identity mismatch, {{ c.excluded_noise }} low-quality extraction, {{ c.excluded_unsupported }} unsupported
+{% if c.degraded %}
+- Degraded: {{ c.degraded | join("; ") | esc }}
+{% endif %}
+{% if not r.subjects | selectattr("findings") | list %}
+- {{ c.no_findings_note | esc }}
+{% endif %}
+
+## Methodology and Limitations
+
+This is a screening aid, not a legal, FCRA or GDPR determination. `VERIFIED` means at least {{ r.meta.min_independent_domains }} independent domains or one primary/top-tier source; `SINGLE_SOURCE` means identity holds but support is uncorroborated; `CONFLICTED` means a contradiction or identity mismatch and is never presented as fact. Severity is a rule-based label from legal status and category, not a probability. Identity is matched on name and context terms only; namesakes can still slip through. Findings come from retrieved public sources and exclude anything unretrievable.
+
+---
+Run `{{ r.run_id }}` · config `{{ r.config_hash }}` · template {{ r.template_version }}
