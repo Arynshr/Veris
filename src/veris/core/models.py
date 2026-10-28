@@ -195,10 +195,14 @@ class SourceMetadata(BaseModel):
 
 
 class Evidence(BaseModel):
-    schema_version: int = 1
+    schema_version: int = 2
     evidence_id: str
     document_id: str
     claim: str
+    snippet: str = Field(
+        default="",
+        description="Markup/boilerplate-free, bounded claim text; the only text reports render.",
+    )
     supporting_passage: str
     span_start: int = Field(
         description="Claim sentence offsets within Document.content."
@@ -214,6 +218,10 @@ class Evidence(BaseModel):
         description="TF-IDF cosine similarity to the subject/context query.",
     )
     flags: list[str] = Field(default_factory=list)
+
+    @property
+    def display_text(self) -> str:
+        return self.snippet or self.claim
 
 
 class Claim(BaseModel):
@@ -294,18 +302,38 @@ class SynthesisSlot(BaseModel):
     claim_ids: list[str]
 
 
+class Reference(BaseModel):
+    """One registry row per canonical URL; findings cite it by `ref_id` (R1, R2...)."""
+
+    ref_id: str
+    document_id: str
+    url: str
+    title: str
+    domain: str
+    tier: int
+    source_type: str
+    published_at: str | None = None
+    retrieved_at: str = ""
+
+
 class ReportFinding(BaseModel):
     claim_id: str
-    text: str
+    merged_claim_ids: list[str] = Field(
+        default_factory=list, description="Same-text claims folded into this finding."
+    )
+    title: str
+    snippet: str
     categories: list[str]
+    adverse: bool = Field(description="False for uncategorized findings: no severity badge.")
     legal_status: LegalStatus
     severity: Severity
     verification: VerificationStatus
     event_date: date | None = None
     undated: bool = False
-    source: str
-    url: str
+    relevance: float = 0.0
+    ref_ids: list[str]
     conflicts_with: list[str] = Field(default_factory=list)
+    secondary_reason: str = ""
 
 
 class SubjectSection(BaseModel):
@@ -313,6 +341,7 @@ class SubjectSection(BaseModel):
     role: str | None = None
     resolution_note: str = ""
     findings: list[ReportFinding] = Field(default_factory=list)
+    secondary: list[ReportFinding] = Field(default_factory=list)
     disputed: list[ReportFinding] = Field(default_factory=list)
 
 
@@ -328,6 +357,7 @@ class CategoryRow(BaseModel):
 class AppendixRow(BaseModel):
     claim_id: str
     passage: str
+    ref_id: str
     url: str
     retrieved_at: str = ""
     status: VerificationStatus
@@ -348,7 +378,9 @@ class Coverage(BaseModel):
     claims_reported: int
     out_of_window: int
     undated: int
+    claims_secondary: int = 0
     excluded_identity: int
+    excluded_noise: int = 0
     excluded_unsupported: int
     degraded: list[str] = Field(default_factory=list)
     no_findings_note: str
@@ -361,13 +393,15 @@ class ReportMeta(BaseModel):
 
 
 class Report(BaseModel):
-    schema_version: int = 1
+    schema_version: int = 2
     template_version: str
     run_id: str
     config_hash: str
     meta: ReportMeta
     summary: SynthesisSlot | None = None
+    summary_ref_ids: list[str] = Field(default_factory=list)
     subjects: list[SubjectSection]
     category_rows: list[CategoryRow]
+    references: list[Reference]
     appendix: list[AppendixRow]
     coverage: Coverage

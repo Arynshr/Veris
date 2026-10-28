@@ -88,8 +88,9 @@ class Settings(BaseSettings):
     source_tiers_path: Path = PROJECT_ROOT / "config" / "source_tiers.yaml"
     taxonomy_path: Path = PROJECT_ROOT / "config" / "taxonomy.yaml"
     safety_path: Path = PROJECT_ROOT / "config" / "safety.yaml"
+    cleaning_path: Path = PROJECT_ROOT / "config" / "cleaning.yaml"
     templates_dir: Path = PROJECT_ROOT / "templates"
-    template_version: str = "v1"
+    template_version: str = "v2"
     paywall_status_codes: list[int] = [402]
     denied_status_codes: list[int] = [401, 403]
     crawler_user_agent: str = "VerisBot/0.2 (research assistant; honours robots.txt)"
@@ -102,6 +103,9 @@ class Settings(BaseSettings):
     denied_ttl_days: int = Field(default=7, ge=1)
     host_denied_threshold: int = Field(default=3, ge=1)
     report_passage_max_chars: int = Field(default=300, ge=50)
+    max_findings_per_subject: int = Field(default=10, ge=1)
+    min_finding_relevance: float = Field(default=0.05, ge=0.0, le=1.0)
+    reject_namesake_documents: bool = True
     slot_min_chars: int = Field(default=40, ge=1)
     slot_max_chars: int = Field(default=900, ge=1)
     summary_fallback_bullets: int = Field(default=3, ge=1)
@@ -140,7 +144,7 @@ def config_hash(settings: Settings) -> str:
     skip = {k for k in type(settings).model_fields if k.endswith(("_api_key", "_path", "_dir"))}
     payload = settings.model_dump(mode="json", exclude=skip)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode())
-    for path in (settings.source_tiers_path, settings.taxonomy_path, settings.safety_path):
+    for path in (settings.source_tiers_path, settings.taxonomy_path, settings.safety_path, settings.cleaning_path):
         digest.update(Path(path).read_bytes())
     root = settings.templates_dir / settings.template_version
     for path in sorted(root.rglob("*")):
