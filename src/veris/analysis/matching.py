@@ -28,8 +28,7 @@ def name_mentioned(text: str, subject: str) -> bool:
 
 
 def namesake_mentioned(text: str, subject: str) -> bool:
-    """True when the text names someone else sharing the subject's surname
-    (e.g. "Nikhil Kamath" for subject "Nithin Kamath"). Multi-token subjects only."""
+    """True when the text names someone else sharing the subject's surname"""
     tokens = _normalize(subject).split()
     if len(tokens) < 2:
         return False
