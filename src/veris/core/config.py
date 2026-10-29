@@ -8,16 +8,30 @@ from datetime import date
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 MAX_SEARCH_RESULTS_CEILING = 10
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
+def _user_dir() -> Path:
+    try:
+        return Path.home() / ".veris"
+    except RuntimeError:
+        return PROJECT_ROOT / ".veris"
+
+
+USER_CONFIG_DIR = _user_dir()
+USER_ENV_PATH = USER_CONFIG_DIR / ".env"
+
+
 class Settings(BaseSettings):
+    # Precedence (highest first): init args/CLI flags > process env > ./.env > <project>/.env > ~/.veris/.env
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=(USER_ENV_PATH, PROJECT_ROOT / ".env", ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
     )
 
     # Search providers
@@ -25,8 +39,28 @@ class Settings(BaseSettings):
     firecrawl_api_key: str | None = None
     searxng_base_url: str | None = None
 
-    groq_api_key: str | None = None
-    groq_model: str = "openai/gpt-oss-20b"
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    llm_api_key: SecretStr | None = None
+    llm_base_url: str | None = None
+    llm_timeout_seconds: int = Field(default=60, ge=1)
+    llm_max_tokens: int = Field(default=2048, ge=1)
+    llm_providers_path: Path = PROJECT_ROOT / "config" / "llm_providers.yaml"
+    # Deprecated: GROQ_API_KEY / GROQ_MODEL map to LLM_* when no provider is configured.
+    groq_api_key: SecretStr | None = None
+    groq_model: str | None = None
+
+    @model_validator(mode="after")
+    def _migrate_legacy_groq(self) -> "Settings":
+        if self.groq_api_key and not (self.llm_provider or self.llm_api_key):
+            logging.getLogger(__name__).warning(
+                "GROQ_API_KEY/GROQ_MODEL are deprecated; set LLM_PROVIDER, LLM_MODEL and LLM_API_KEY "
+                "(or run `veris init`)."
+            )
+            self.llm_provider = "groq"
+            self.llm_api_key = self.groq_api_key
+            self.llm_model = self.llm_model or self.groq_model or "openai/gpt-oss-20b"
+        return self
 
     max_search_results_per_query: int = Field(
         default=2, ge=1, le=MAX_SEARCH_RESULTS_CEILING
@@ -54,6 +88,24 @@ class Settings(BaseSettings):
     source_tiers_path: Path = PROJECT_ROOT / "config" / "source_tiers.yaml"
     taxonomy_path: Path = PROJECT_ROOT / "config" / "taxonomy.yaml"
     safety_path: Path = PROJECT_ROOT / "config" / "safety.yaml"
+    cleaning_path: Path = PROJECT_ROOT / "config" / "cleaning.yaml"
+    templates_dir: Path = PROJECT_ROOT / "templates"
+    template_version: str = "v2"
+    paywall_status_codes: list[int] = [402]
+    denied_status_codes: list[int] = [401, 403]
+    crawler_user_agent: str = "VerisBot/0.2 (research assistant; honours robots.txt)"
+    extraction_timeout_seconds: int = Field(default=30, ge=1)
+    extraction_retries: int = Field(default=1, ge=0)
+    extraction_concurrency: int = Field(default=4, ge=1)
+    provider_failure_threshold: int = Field(default=3, ge=1)
+    crawl_memory_path: Path = PROJECT_ROOT / ".veris" / "crawl_memory.json"
+    robots_ttl_hours: int = Field(default=24, ge=1)
+    denied_ttl_days: int = Field(default=7, ge=1)
+    host_denied_threshold: int = Field(default=3, ge=1)
+    report_passage_max_chars: int = Field(default=300, ge=50)
+    max_findings_per_subject: int = Field(default=10, ge=1)
+    min_finding_relevance: float = Field(default=0.05, ge=0.0, le=1.0)
+    reject_namesake_documents: bool = True
     slot_min_chars: int = Field(default=40, ge=1)
     slot_max_chars: int = Field(default=900, ge=1)
     summary_fallback_bullets: int = Field(default=3, ge=1)
@@ -88,11 +140,15 @@ def get_logger(name: str) -> logging.Logger:
 
 
 def config_hash(settings: Settings) -> str:
-    """Stable hash of non-secret settings plus the YAML policy files."""
-    payload = settings.model_dump(
-        mode="json", exclude={k for k in type(settings).model_fields if k.endswith("_api_key")}
-    )
+    """Stable hash of non-secret, non-path settings plus policy YAMLs and templates."""
+    skip = {k for k in type(settings).model_fields if k.endswith(("_api_key", "_path", "_dir"))}
+    payload = settings.model_dump(mode="json", exclude=skip)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode())
-    for path in (settings.source_tiers_path, settings.taxonomy_path, settings.safety_path):
+    for path in (settings.source_tiers_path, settings.taxonomy_path, settings.safety_path, settings.cleaning_path):
         digest.update(Path(path).read_bytes())
+    root = settings.templates_dir / settings.template_version
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            digest.update(path.relative_to(root).as_posix().encode())
+            digest.update(path.read_bytes())
     return digest.hexdigest()[:16]

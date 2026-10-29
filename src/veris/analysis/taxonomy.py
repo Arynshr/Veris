@@ -26,6 +26,7 @@ class Taxonomy(BaseModel):
     status_cues: dict[LegalStatus, list[str]]
     negators: list[str]
     negation_window_tokens: int = 3
+    status_window_chars: int = 160
     severity: dict[LegalStatus, dict[str, Severity]]
 
     _category_res: dict[str, re.Pattern[str]] = PrivateAttr(default_factory=dict)
@@ -55,6 +56,9 @@ class Taxonomy(BaseModel):
 
     def match_categories(self, text: str) -> list[str]:
         return [c for c, rx in self._category_res.items() if rx.search(text)]
+
+    def category_spans(self, text: str) -> list[tuple[int, int]]:
+        return [m.span() for rx in self._category_res.values() for m in rx.finditer(text)]
 
     def cue_matches(self, status: LegalStatus, text: str) -> list[re.Match[str]]:
         return list(self._cue_res[status].finditer(text))

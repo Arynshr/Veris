@@ -4,6 +4,7 @@ CLI entrypoint (spec section 13).
     veris research "state of solid-state batteries in 2026"
     veris research "the board of directors of XYZ company" --mode background_check
     veris research --subject "Jane Doe" --context "CEO of Acme Corp" --mode background_check
+    veris providers
     veris inspect <run_id>
     veris sources <run_id>
     veris verify <run_id> [--subject "Jane Doe"]
@@ -14,8 +15,10 @@ CLI entrypoint (spec section 13).
 import asyncio
 import json
 import logging
+import sys
 from pathlib import Path
 
+import click
 import typer
 from pydantic import ValidationError
 from rich.console import Console
@@ -26,6 +29,9 @@ from veris.core.config import (
     configure_logging,
     get_settings,
 )
+from veris.core.config import USER_ENV_PATH
+from veris.core.credentials import save_llm_settings
+from veris.core.llm import LLMError, get_llm, load_providers, missing_llm_fields
 from veris.core.models import (
     EventStatus,
     PipelineStage,
@@ -38,7 +44,18 @@ from veris.evaluation import EvalReport, compare_reports, load_golden_cases, run
 from veris.pipeline import stream_research
 
 app = typer.Typer(
-    add_completion=False, help="Veris - evidence-grounded research assistant."
+    add_completion=False,
+    no_args_is_help=True,
+    rich_markup_mode="markdown",
+    help="""Veris researches a topic (or screens a person/company) and writes a cited Markdown report.
+
+**Quick start**
+
+1. Run `veris init` once to pick an LLM provider and model and save your key (or set `LLM_PROVIDER`, `LLM_MODEL`, `LLM_API_KEY` in the environment or a `.env` file; `veris providers` lists the choices). Add one search key: `TAVILY_API_KEY`, `FIRECRAWL_API_KEY` or `SEARXNG_BASE_URL`.
+2. Run `veris research "your topic"`.
+3. Open `report.md`. Use `veris inspect RUN_ID` to see what was found and `veris sources RUN_ID` for the pages used.
+
+Every run is saved under `runs/RUN_ID/`. Pages that refuse automated access (robots.txt, 401/403, paywalls) are skipped and remembered, never bypassed.""",
 )
 console = Console()
 
@@ -64,73 +81,162 @@ def _print_event(event) -> None:
     )
 
 
+def _rebuild(settings, updates: dict):
+    return type(settings)(**{**settings.model_dump(), **updates})
+
+
+def _check_llm(settings) -> None:
+    try:
+        get_llm(settings).validate()
+    except LLMError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+
+
+def _ensure_llm(settings):
+    """Use configured values (flags, env, .env files); prompt only for what is missing, once."""
+    try:
+        missing = missing_llm_fields(settings)
+        providers = sorted(load_providers(settings.llm_providers_path).providers)
+    except LLMError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    if not missing:
+        return settings
+    if not sys.stdin.isatty():
+        console.print(
+            "[red]LLM not configured.[/red] Run `veris init` once, or set "
+            + ", ".join(m.upper() for m in missing)
+            + " in the environment or a .env file."
+        )
+        raise typer.Exit(code=1)
+    console.print(
+        "[yellow]LLM is not configured.[/yellow] Checked environment variables and .env files "
+        f"(current folder, project folder, {USER_ENV_PATH})."
+    )
+    updates: dict = {}
+    if "llm_provider" in missing:
+        updates["llm_provider"] = typer.prompt("LLM provider", type=click.Choice(providers))
+    if "llm_model" in missing:
+        updates["llm_model"] = typer.prompt("Model id")
+    try:
+        for name in missing_llm_fields(_rebuild(settings, updates)):
+            updates[name] = typer.prompt(
+                "API key" if name == "llm_api_key" else "Base URL", hide_input=name == "llm_api_key"
+            )
+    except LLMError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    settings = _rebuild(settings, updates)
+    _check_llm(settings)
+    if typer.confirm(f"Save these LLM settings to {USER_ENV_PATH} so you are not asked again?", default=True):
+        console.print(f"[green]Saved to {save_llm_settings(settings)}[/green] (owner-only permissions).")
+    return settings
+
+
 @app.command()
 def research(
     query: str = typer.Argument(
-        None, help='Free-text request, e.g. "state of solid-state batteries in 2026".'
+        None,
+        help='What to research, in plain English, e.g. "state of solid-state batteries in 2026". Omit it when using --subject.',
     ),
     mode: ResearchMode = typer.Option(
         None,
         "--mode",
         "-m",
-        help="Override auto-detected mode (general | background_check).",
+        help="`general` researches a topic; `background_check` screens a person or company for adverse news. Detected automatically if omitted.",
+        rich_help_panel="What to research",
     ),
     subject: str = typer.Option(
         None,
         "--subject",
         "-s",
-        help="Skip query understanding: research this exact name/topic directly.",
+        help="Research exactly this name or topic and skip request parsing.",
+        rich_help_panel="What to research",
     ),
     subject_type: SubjectType = typer.Option(
         SubjectType.TOPIC,
         "--type",
         "-t",
-        help="Subject type (only used with --subject).",
+        help="Kind of subject (person, topic, ...). Only used with --subject.",
+        rich_help_panel="What to research",
     ),
     context: str = typer.Option(
         "",
         "--context",
         "-c",
-        help="Disambiguating context, e.g. role, employer, location, timeframe.",
+        help="Detail that tells similar names apart: role, employer, city, years.",
+        rich_help_panel="What to research",
     ),
     output: str = typer.Option(
-        "report.md", "--output", "-o", help="Path to write the final Markdown report."
+        "report.md", "--output", "-o", help="Where to write the Markdown report."
     ),
     max_results: int = typer.Option(
         None,
         "--max-results",
         "-n",
-        help=f"Search results kept per query (1-{MAX_SEARCH_RESULTS_CEILING}, default: config value). Overrides for this run only.",
+        help=f"Search results kept per query (1-{MAX_SEARCH_RESULTS_CEILING}). This run only.",
+        rich_help_panel="Limits",
     ),
     max_queries: int = typer.Option(
         None,
         "--max-queries",
-        help="Max queries per research plan (overrides for this run only).",
+        help="Most search queries planned per subject. This run only.",
+        rich_help_panel="Limits",
     ),
     max_documents: int = typer.Option(
         None,
         "--max-documents",
         "-d",
-        help="Unique pages actually crawled per subject, best-ranked first (default: config value). Lower this if synthesis hits the model's token-per-minute limit.",
+        help="Most pages read per subject, best-ranked first. Lower it for faster, cheaper runs.",
+        rich_help_panel="Limits",
     ),
     max_subjects: int = typer.Option(
         None,
         "--max-subjects",
-        help="Max subjects a role/group request can resolve to, e.g. 'the board of directors of X' (overrides for this run only).",
+        help="Most people a group request can expand to, e.g. 'the board of directors of X'.",
+        rich_help_panel="Limits",
+    ),
+    provider: str = typer.Option(
+        None,
+        "--provider",
+        help="LLM provider, e.g. openai, anthropic, groq. See `veris providers`. Env: LLM_PROVIDER.",
+        rich_help_panel="LLM",
+    ),
+    model: str = typer.Option(
+        None, "--model", help="LLM model id. Env: LLM_MODEL.", rich_help_panel="LLM"
+    ),
+    llm_base_url: str = typer.Option(
+        None,
+        "--llm-base-url",
+        help="Endpoint for the `custom` provider or a proxy. Env: LLM_BASE_URL. The API key is read from LLM_API_KEY or asked for interactively.",
+        rich_help_panel="LLM",
     ),
     searxng_url: str = typer.Option(
         None,
         "--searxng-url",
-        help="SearXNG instance URL, e.g. http://localhost:8080. Opt-in only - unset means SearXNG is not used.",
+        help="Use your own SearXNG instance, e.g. http://localhost:8080. Off unless set.",
+        rich_help_panel="Search",
     ),
     run_id: str = typer.Option(
-        None, "--run-id", help="Optional explicit run id (default: generated)."
+        None, "--run-id", help="Name for this run (default: generated).", rich_help_panel="Other"
     ),
     verbose: bool = typer.Option(
-        False, "--verbose", "-v", help="Enable debug-level logging."
+        False, "--verbose", "-v", help="Show debug logs.", rich_help_panel="Other"
     ),
 ) -> None:
-    """Run the full research pipeline end-to-end, printing progress as it happens."""
+    """Research a topic or screen a person/company and write a cited report.
+
+    **Examples**
+
+    `veris research "state of solid-state batteries in 2026"`
+
+    `veris research "board of directors of Acme Corp" --mode background_check`
+
+    `veris research --subject "Jane Doe" --context "CEO of Acme Corp" -m background_check`
+
+    Needs an LLM (`LLM_PROVIDER`, `LLM_MODEL`, `LLM_API_KEY`) and a search key. If any are missing in a terminal, you are asked for them.
+    """
     if not query and not subject:
         console.print("[red]Provide either a free-text QUERY or --subject.[/red]")
         raise typer.Exit(code=1)
@@ -146,6 +252,9 @@ def research(
             "max_documents_per_subject": max_documents,
             "max_resolved_subjects": max_subjects,
             "searxng_base_url": searxng_url,
+            "llm_provider": provider,
+            "llm_model": model,
+            "llm_base_url": llm_base_url,
         }.items()
         if v is not None
     }
@@ -165,6 +274,8 @@ def research(
         console.print(f"[red]Invalid option:[/red] {exc}")
         raise typer.Exit(code=1)
 
+    settings = _ensure_llm(settings)
+
     override = None
     if subject:
         override = [
@@ -182,6 +293,8 @@ def research(
             "an extra subject-resolution search before research begins.[/dim]\n"
         )
 
+    degraded: list[str] = []
+
     async def _run() -> str | None:
         final_run_id = run_id
         async for event in stream_research(
@@ -198,6 +311,7 @@ def research(
                 and event.status == EventStatus.COMPLETED
             ):
                 final_run_id = event.data.get("run_id", final_run_id)
+                degraded.extend(event.data.get("degraded", []))
         return final_run_id
 
     try:
@@ -212,6 +326,57 @@ def research(
     console.print(
         f"\n[green]Research completed.[/green] [dim](veris inspect {completed_run_id})[/dim]"
     )
+    if degraded:
+        console.print("[yellow]Completed with warnings:[/yellow] " + ", ".join(degraded))
+
+
+@app.command()
+def init() -> None:
+    """Set up your LLM once: pick a provider and model, check the key, and save it for future runs."""
+    if not sys.stdin.isatty():
+        console.print("[red]`veris init` needs an interactive terminal.[/red] In scripts, set LLM_PROVIDER, LLM_MODEL and LLM_API_KEY.")
+        raise typer.Exit(code=1)
+    settings = get_settings()
+    try:
+        registry = load_providers(settings.llm_providers_path).providers
+    except LLMError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    provider = typer.prompt("LLM provider", type=click.Choice(sorted(registry)), default=settings.llm_provider)
+    spec = registry[provider]
+    updates: dict = {
+        "llm_provider": provider,
+        "llm_model": typer.prompt("Model id", default=settings.llm_model),
+    }
+    if not spec.base_url:
+        updates["llm_base_url"] = typer.prompt("Base URL", default=settings.llm_base_url)
+    if spec.key_required:
+        current = settings.llm_api_key.get_secret_value() if settings.llm_api_key else ""
+        label = "API key (Enter keeps the current one)" if current else "API key"
+        updates["llm_api_key"] = (
+            typer.prompt(label, default="", hide_input=True, show_default=False) or current
+        )
+    settings = _rebuild(settings, updates)
+    _check_llm(settings)
+    console.print(f"[green]Saved to {save_llm_settings(settings)}[/green] (owner-only permissions).")
+    console.print("Environment variables and .env files still override this file.")
+
+
+@app.command()
+def providers() -> None:
+    """List supported LLM providers and how to configure them."""
+    try:
+        registry = load_providers(get_settings().llm_providers_path)
+    except LLMError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    table = Table("Provider", "API style", "Endpoint", "Key needed")
+    for name, spec in sorted(registry.providers.items()):
+        table.add_row(
+            name, spec.kind, spec.base_url or "set LLM_BASE_URL", "yes" if spec.key_required else "no"
+        )
+    console.print(table)
+    console.print("Set LLM_PROVIDER, LLM_MODEL and LLM_API_KEY (env or .env), then run `veris research ...`.")
 
 
 @app.command()

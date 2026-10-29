@@ -1,27 +1,17 @@
 """Executive-summary slot: eligibility, fixed ordering, data block, validated synthesis."""
 
+import asyncio
 from collections import defaultdict
 
 from veris.analysis.taxonomy import load_taxonomy
 from veris.core.config import Settings
-from veris.core.models import (
-    Claim,
-    Evidence,
-    Severity,
-    SynthesisSlot,
-    VerificationResult,
-)
+from veris.core.models import Claim, Evidence, SynthesisSlot, VerificationResult
+from veris.synthesis.ordering import claim_relevance, claim_sort_key
 from veris.synthesis.slots import SlotLLM, sanitize, synthesize_slots
 from veris.synthesis.validator import ValidationContext, is_eligible
 
 SUMMARY_SLOT_ID = "summary"
-_SEVERITY_ORDER = {Severity.HIGH: 0, Severity.MEDIUM: 1, Severity.LOW: 2}
 _INSTRUCTION = "Write the executive summary: 2-4 sentences covering the key findings below."
-
-
-def _sort_key(claim: Claim, relevance: float) -> tuple:
-    day = claim.event_date
-    return (_SEVERITY_ORDER[claim.severity], -(day.toordinal()) if day else 1, -relevance, claim.claim_id)
 
 
 def build_summary_slots(
@@ -39,18 +29,17 @@ def build_summary_slots(
         min_chars=settings.slot_min_chars,
         max_chars=settings.slot_max_chars,
     )
-    relevance = {
-        c.claim_id: max((ctx.evidence[i].relevance_score for i in c.evidence_ids if i in ctx.evidence), default=0.0)
-        for c in claims
-    }
+    relevance = {c.claim_id: claim_relevance(c, ctx.evidence) for c in claims}
     by_subject: dict[str, list[Claim]] = defaultdict(list)
-    for claim in sorted((c for c in claims if is_eligible(c, ctx)), key=lambda c: _sort_key(c, relevance[c.claim_id])):
+    for claim in sorted(
+        (c for c in claims if is_eligible(c, ctx)), key=lambda c: claim_sort_key(c, relevance[c.claim_id])
+    ):
         by_subject[claim.subject].append(claim)
     capped = [c for items in by_subject.values() for c in items[: settings.max_synthesis_evidence_per_subject]]
     ids = {c.claim_id for c in capped}
     selected = sorted(
         (c for c in capped if set(ctx.verdicts[c.claim_id].conflicts_with) <= ids),
-        key=lambda c: _sort_key(c, relevance[c.claim_id]),
+        key=lambda c: claim_sort_key(c, relevance[c.claim_id]),
     )
     if not selected:
         return []
@@ -69,3 +58,15 @@ def build_summary_slots(
         llm=llm,
         settings=settings,
     )
+
+
+async def generate_summary(
+    claims: list[Claim],
+    verifications: list[VerificationResult],
+    evidence_list: list[Evidence],
+    settings: Settings,
+    llm: SlotLLM | None,
+) -> SynthesisSlot | None:
+    """The run's single model-written slot; None when no claim is eligible."""
+    slots = await asyncio.to_thread(build_summary_slots, claims, verifications, evidence_list, settings, llm)
+    return slots[0] if slots else None

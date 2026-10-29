@@ -1,0 +1,22 @@
+# Evidence-time passage cleaning (schema_version 1). Patterns are case-insensitive regexes
+# (anchor with \b yourself); a line is dropped as boilerplate only if it is also short.
+schema_version: 1
+boilerplate_max_chars: 200
+min_snippet_chars: 40
+snippet_max_chars: 280
+max_link_text_ratio: 0.5
+repeat_min_tokens: 8
+min_unique_token_ratio: 0.5
+boilerplate_patterns:
+  - '\b(?:accept|manage|reject)(?: all)? cookies\b'
+  - '\bcookie (?:policy|settings|preferences)\b'
+  - '\bskip to (?:main )?content\b'
+  - '\bsubscribe (?:to|for) (?:our|the)? ?newsletter\b'
+  - '\b(?:also|related|recommended|trending|more) (?:read|articles?|stories|posts|news|videos?)\b'
+  - '\b(?:advertisement|sponsored(?: content)?|advertise with us)\b'
+  - '\bshare (?:this )?(?:on|via) (?:facebook|twitter|x|whatsapp|linkedin|email)\b'
+  - '\bfollow us on\b'
+  - '\b(?:all rights reserved|privacy policy|terms (?:of use|of service|and conditions))\b'
+  - '\b(?:click here|read more|download the app)\b'
+  - '\bimage (?:credit|source|courtesy)\b'
+  - '\|[^|]*\|'

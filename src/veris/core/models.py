@@ -159,6 +159,7 @@ class SourceRequirement(BaseModel):
 
 
 class ResearchPlan(BaseModel):
+    schema_version: int = 1
     objective: str
     queries: list[SearchQuery]
     source_requirements: list[SourceRequirement] = Field(default_factory=list)
@@ -194,9 +195,14 @@ class SourceMetadata(BaseModel):
 
 
 class Evidence(BaseModel):
+    schema_version: int = 2
     evidence_id: str
     document_id: str
     claim: str
+    snippet: str = Field(
+        default="",
+        description="Markup/boilerplate-free, bounded claim text; the only text reports render.",
+    )
     supporting_passage: str
     span_start: int = Field(
         description="Claim sentence offsets within Document.content."
@@ -212,6 +218,10 @@ class Evidence(BaseModel):
         description="TF-IDF cosine similarity to the subject/context query.",
     )
     flags: list[str] = Field(default_factory=list)
+
+    @property
+    def display_text(self) -> str:
+        return self.snippet or self.claim
 
 
 class Claim(BaseModel):
@@ -234,6 +244,7 @@ class Claim(BaseModel):
 
 
 class VerificationResult(BaseModel):
+    schema_version: int = 1
     claim_id: str
     status: VerificationStatus
     subject_match_score: float = Field(
@@ -250,7 +261,21 @@ class VerificationResult(BaseModel):
     )
 
 
+class RetrievalStats(BaseModel):
+    attempted: int = 0
+    fetched: int = 0
+    failed: int = 0
+    timed_out: int = 0
+    access_denied: int = 0
+    paywalled: int = 0
+    robots_blocked: int = 0
+    memory_skipped: int = 0
+    snippet_only: int = 0
+    sample_errors: list[str] = Field(default_factory=list)
+
+
 class ResearchRun(BaseModel):
+    schema_version: int = 1
     run_id: str
     query: str
     mode: SubjectMode
@@ -263,6 +288,11 @@ class ResearchRun(BaseModel):
     claims_verified: int = 0
     claims_single_source: int = 0
     claims_conflicted: int = 0
+    queries_run: int = 0
+    providers_used: list[str] = Field(default_factory=list)
+    retrieval: RetrievalStats = Field(default_factory=RetrievalStats)
+    adverse_by_severity: dict[str, int] = Field(default_factory=dict)
+    degraded: list[str] = Field(default_factory=list)
     config_hash: str = ""
 
 
@@ -270,3 +300,108 @@ class SynthesisSlot(BaseModel):
     slot_id: str
     text: str
     claim_ids: list[str]
+
+
+class Reference(BaseModel):
+    """One registry row per canonical URL; findings cite it by `ref_id` (R1, R2...)."""
+
+    ref_id: str
+    document_id: str
+    url: str
+    title: str
+    domain: str
+    tier: int
+    source_type: str
+    published_at: str | None = None
+    retrieved_at: str = ""
+
+
+class ReportFinding(BaseModel):
+    claim_id: str
+    merged_claim_ids: list[str] = Field(
+        default_factory=list, description="Same-text claims folded into this finding."
+    )
+    title: str
+    snippet: str
+    categories: list[str]
+    adverse: bool = Field(description="False for uncategorized findings: no severity badge.")
+    legal_status: LegalStatus
+    severity: Severity
+    verification: VerificationStatus
+    event_date: date | None = None
+    undated: bool = False
+    relevance: float = 0.0
+    ref_ids: list[str]
+    conflicts_with: list[str] = Field(default_factory=list)
+    secondary_reason: str = ""
+
+
+class SubjectSection(BaseModel):
+    name: str
+    role: str | None = None
+    resolution_note: str = ""
+    findings: list[ReportFinding] = Field(default_factory=list)
+    secondary: list[ReportFinding] = Field(default_factory=list)
+    disputed: list[ReportFinding] = Field(default_factory=list)
+
+
+class CategoryRow(BaseModel):
+    subject: str
+    category: str
+    high: int = 0
+    medium: int = 0
+    low: int = 0
+    claim_ids: list[str]
+
+
+class AppendixRow(BaseModel):
+    claim_id: str
+    passage: str
+    ref_id: str
+    url: str
+    retrieved_at: str = ""
+    status: VerificationStatus
+
+
+class Coverage(BaseModel):
+    queries_run: int
+    providers_used: list[str]
+    retrieval: RetrievalStats
+    sources_registered: int
+    unretrieved: int
+    earliest_event: date | None = None
+    latest_event: date | None = None
+    lookback_years: int
+    window_start: date
+    as_of: date
+    claims_total: int
+    claims_reported: int
+    out_of_window: int
+    undated: int
+    claims_secondary: int = 0
+    excluded_identity: int
+    excluded_noise: int = 0
+    excluded_unsupported: int
+    degraded: list[str] = Field(default_factory=list)
+    no_findings_note: str
+
+
+class ReportMeta(BaseModel):
+    query: str
+    research_mode: ResearchMode
+    min_independent_domains: int
+
+
+class Report(BaseModel):
+    schema_version: int = 2
+    template_version: str
+    run_id: str
+    config_hash: str
+    meta: ReportMeta
+    summary: SynthesisSlot | None = None
+    summary_ref_ids: list[str] = Field(default_factory=list)
+    subjects: list[SubjectSection]
+    category_rows: list[CategoryRow]
+    references: list[Reference]
+    appendix: list[AppendixRow]
+    coverage: Coverage

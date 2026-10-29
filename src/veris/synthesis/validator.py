@@ -44,6 +44,17 @@ def numbers(text: str) -> set[float]:
     return out
 
 
+_MON_FULL = "January|February|March|April|June|July|August|September|October|November|December"
+_MON_ABBR = "Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept?|Oct|Nov|Dec"
+_MONTH_RE = re.compile(
+    rf"\b(?:{_MON_FULL}|(?:{_MON_ABBR})\.?(?=\s+\d)|May(?=\s+\d)|(?<=\d\s)May\b)"
+)
+
+
+def months(text: str) -> set[str]:
+    return {m.group()[:3].lower() for m in _MONTH_RE.finditer(text)}
+
+
 def is_eligible(claim: Claim, ctx: ValidationContext) -> bool:
     verdict = ctx.verdicts.get(claim.claim_id)
     if claim.flags or claim.out_of_window or verdict is None:
@@ -62,12 +73,14 @@ def cited_passages(claim: Claim, ctx: ValidationContext) -> list[str]:
     return texts
 
 
-def validate_slot(slot: SynthesisSlot, ctx: ValidationContext) -> list[str]:
+def validate_slot(
+    slot: SynthesisSlot, ctx: ValidationContext, *, check_min: bool = True
+) -> list[str]:
     errors: list[str] = []
     text = slot.text.strip()
     if not text:
         return ["empty text"]
-    if len(text) < ctx.min_chars or len(text) > ctx.max_chars:
+    if len(text) > ctx.max_chars or (check_min and len(text) < ctx.min_chars):
         errors.append(f"length {len(text)} outside {ctx.min_chars}-{ctx.max_chars}")
     if not slot.claim_ids:
         return [*errors, "no claim_ids"]
@@ -90,9 +103,11 @@ def validate_slot(slot: SynthesisSlot, ctx: ValidationContext) -> list[str]:
     if errors:
         return errors
 
-    allowed = set().union(*(numbers(p) for c in cited for p in cited_passages(c, ctx)))
-    if extra := sorted(numbers(text) - allowed):
+    passages = [p for c in cited for p in cited_passages(c, ctx)]
+    if extra := sorted(numbers(text) - set().union(*map(numbers, passages))):
         errors.append(f"values not in cited passages: {extra}")
+    if extra := sorted(months(text) - set().union(*map(months, passages))):
+        errors.append(f"months not in cited passages: {extra}")
     stated = resolve_status(text, ctx.taxonomy, adverse=True)
     if stated != LegalStatus.ALLEGED and stated not in {c.legal_status for c in cited}:
         errors.append(f"legal status '{stated.value}' not supported by cited claims")

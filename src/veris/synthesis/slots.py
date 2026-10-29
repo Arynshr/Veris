@@ -2,10 +2,10 @@
 
 from collections.abc import Callable
 
-from groq import Groq
 from pydantic import BaseModel
 
 from veris.core.config import Settings, get_logger
+from veris.core.ports import LLM
 from veris.core.models import Claim, SynthesisSlot
 from veris.synthesis.validator import ValidationContext, is_eligible, validate_slot
 
@@ -37,25 +37,9 @@ def sanitize(text: str, limit: int = 260) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
-def groq_slot_llm(settings: Settings) -> SlotLLM | None:
-    if not settings.groq_api_key:
-        return None
-    client = Groq(api_key=settings.groq_api_key)
+def make_slot_llm(llm: LLM) -> SlotLLM:
     schema = SlotResponse.model_json_schema()
-
-    def call(system: str, user: str) -> str:
-        response = client.chat.completions.create(
-            model=settings.groq_model,
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-            temperature=0,
-            response_format={
-                "type": "json_schema",
-                "json_schema": {"name": "synthesis_slots", "schema": schema},
-            },
-        )
-        return response.choices[0].message.content or ""
-
-    return call
+    return lambda system, user: llm.complete(system, user, schema=schema)
 
 
 def _user_prompt(instruction: str, data_block: str, slot_ids: list[str], feedback: str) -> str:
@@ -89,7 +73,7 @@ def fallback_slots(
             text=text[: ctx.max_chars],
             claim_ids=[c.claim_id for c in group],
         )
-        if errors := validate_slot(slot, ctx):
+        if errors := validate_slot(slot, ctx, check_min=False):
             logger.warning("fallback slot dropped: %s", errors)
             continue
         slots.append(slot)

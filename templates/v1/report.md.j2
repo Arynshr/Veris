@@ -1,0 +1,272 @@
+```jinja2
+{% set bg = r.meta.research_mode == "background_check" %}
+{% set labels = {
+  "criminal": "Criminal Records",
+  "regulatory_sanctions": "Regulatory & Sanctions",
+  "litigation": "Legal Proceedings",
+  "financial_crime_fraud": "Financial Crime & Fraud",
+  "corruption_bribery": "Corruption & Bribery",
+  "esg_labor_safety": "ESG, Labor & Safety",
+  "reputational": "Reputational & Other"
+} %}
+{% set c = r.coverage %}
+{% set refs = namespace(by_claim={}) %}
+
+{# Build stable reference IDs for this report. #}
+{% for a in r.appendix %}
+  {% if a.claim_id and a.claim_id not in refs.by_claim %}
+    {% set _ = refs.by_claim.update({a.claim_id: "R" ~ loop.index}) %}
+  {% endif %}
+{% endfor %}
+
+{% macro reference_ids(f) %}
+  {% if f.claim_id in refs.by_claim %}
+    [{{ refs.by_claim[f.claim_id] }}]
+  {% else %}
+    Reference pending
+  {% endif %}
+{% endmacro %}
+
+{% macro finding(f) %}
+#### {{ f.text | esc }}
+
+{% if f.event_date %}
+**Event date:** {{ f.event_date }}
+{% elif f.undated %}
+**Event date:** Unknown
+{% endif %}
+{% if f.severity %}
+**Evidence assessment:** {{ f.severity | title }}
+{% endif %}
+{% if f.legal_status and f.legal_status != "unknown" %}
+**Reported legal status:** {{ f.legal_status | replace("_", " ") | title }}
+{% endif %}
+{% if f.verification == "SINGLE_SOURCE" %}
+**Corroboration:** Single source; not independently corroborated.
+{% endif %}
+{% if f.conflicts_with %}
+**Conflicting evidence:** Other claims require reconciliation ({{ f.conflicts_with | join(", ") }}). This finding should not be treated as settled.
+{% endif %}
+**Reference:** {{ reference_ids(f) | trim }}
+{% if f.source %}
+<text>{{ f.source | esc }}</text>
+{% endif %}
+
+{% endmacro %}
+
+# {{ "Background Check Report" if bg else "Research Intelligence Report" }}
+
+**Subject / research request:** {{ r.meta.query | esc }}
+
+**Report date:** {{ c.as_of }}
+
+**Review period:** {{ c.window_start }} to {{ c.as_of }}
+
+**Report status:** {% if c.degraded %}Limited — see coverage and limitations{% else %}Completed — subject to stated limitations{% endif %}
+
+{% if bg %}
+> **Important:** This report is an information-screening aid, not a legal determination, finding of misconduct, or substitute for independent verification. An absence of reported findings does not establish that no relevant records exist.
+{% endif %}
+
+---
+
+## 1. Executive summary
+
+{% if r.summary and r.summary.text %}
+{{ r.summary.text | esc }}
+
+{% elif c.claims_reported %}
+The research workflow identified {{ c.claims_reported }} reportable claim(s). Review the findings and evidence-quality notes below. A consolidated narrative summary was not available.
+
+{% else %}
+{{ c.no_findings_note | default("No reportable findings were produced by this research run.") | esc }}
+{% endif %}
+
+{% if c.claims_reported %}
+**Research output:** {{ c.claims_reported }} reportable claim(s) from {{ c.sources_registered }} registered source(s).
+{% endif %}
+
+{% if c.degraded %}
+**Research limitations:** {{ c.degraded | join("; ") | esc }}
+{% endif %}
+
+## 2. Subject identification and scope
+
+{% for s in r.subjects %}
+### {{ s.name | esc }}{% if s.role %} — {{ s.role | esc }}{% endif %}
+
+{% if s.resolution_note %}
+**Identity assessment:** {{ s.resolution_note | esc }}
+{% else %}
+**Identity assessment:** Subject resolution details were not supplied.
+{% endif %}
+
+{% if s.findings %}
+**Findings available:** {{ s.findings | length }}
+{% else %}
+**Findings available:** No established findings in the reportable results.
+{% endif %}
+
+{% if s.disputed %}
+**Unresolved evidence:** Conflicting claims are listed separately in Section 4.
+{% endif %}
+
+{% endfor %}
+
+## 3. Key findings
+
+{% for s in r.subjects %}
+{% if s.findings %}
+### {{ s.name | esc }}{% if s.role %} — {{ s.role | esc }}{% endif %}
+
+{% for f in s.findings %}
+{{ finding(f) | trim }}
+
+{% endfor %}
+{% endif %}
+{% endfor %}
+
+{% if not c.claims_reported %}
+{{ c.no_findings_note | default("No reportable findings were identified within the available research results.") | esc }}
+
+{% endif %}
+
+## 4. Conflicting and unverified information
+
+This section separates unresolved evidence from established findings. Conflicting reports must not be presented as confirmed facts.
+
+{% set has_disputes = namespace(value=false) %}
+{% for s in r.subjects %}
+  {% if s.disputed %}
+    {% set has_disputes.value = true %}
+### {{ s.name | esc }}{% if s.role %} — {{ s.role | esc }}{% endif %}
+
+{% for f in s.disputed %}
+{{ finding(f) | trim }}
+
+{% endfor %}
+  {% endif %}
+{% endfor %}
+
+{% if not has_disputes.value %}
+No explicitly disputed findings were recorded by the workflow.
+{% endif %}
+
+{% set has_unverified = namespace(value=false) %}
+{% for s in r.subjects %}
+  {% for f in s.findings %}
+    {% if f.verification == "SINGLE_SOURCE" %}
+      {% set has_unverified.value = true %}
+    {% endif %}
+  {% endfor %}
+{% endfor %}
+
+{% if has_unverified.value %}
+**Verification limitation:** Some reportable claims rely on a single source. They should be treated as leads for further verification, not as independently established facts.
+{% endif %}
+
+## 5. Findings by category
+
+This summary supports navigation and review. Counts do not independently establish the seriousness or credibility of a finding.
+
+{% if r.category_rows %}
+| Subject | Category | High | Medium | Low | Claim references |
+|---|---|---:|---:|---:|---|
+{% for row in r.category_rows %}
+| {{ row.subject | esc }} | {{ labels.get(row.category, row.category) | replace("_", " ") | title | esc }} | {{ row.high }} | {{ row.medium }} | {{ row.low }} | {% for id in row.claim_ids %}`{{ id }}`{{ ", " if not loop.last }}{% endfor %} |
+{% endfor %}
+{% else %}
+No categorized findings were supplied.
+{% endif %}
+
+```jinja2
+## 6. References
+
+References identify the source material associated with extracted claims. A reference supports traceability; its inclusion does not imply independent verification.
+
+{% if r.appendix %}
+{% for a in r.appendix %}
+### {{ refs.by_claim.get(a.get("claim_id"), "R" ~ loop.index) }} — {{ a.get("title") or a.get("source") or "Source record" | esc }}
+
+{% if a.get("publisher") %}
+**Publisher:** {{ a.get("publisher") | esc }}
+{% elif a.get("source") %}
+**Source:** {{ a.get("source") | esc }}
+{% endif %}
+
+{% if a.get("published_at") %}
+**Publication date:** {{ a.get("published_at") }}
+{% endif %}
+
+{% if a.get("retrieved_at") %}
+**Retrieved:** {{ a.get("retrieved_at") }}
+{% endif %}
+
+{% if a.get("url") %}
+**URL:** {{ a.get("url") | url }}
+{% endif %}
+
+{% if a.get("status") %}
+**Evidence status:** {{ a.get("status") | replace("_", " ") | title }}
+{% endif %}
+
+{% if a.get("passage") %}
+**Relevant extracted passage:** {{ a.get("passage") | esc }}
+{% endif %}
+
+{% if a.get("claim_id") %}
+**Internal claim ID:** `{{ a.get("claim_id") }}`
+{% endif %}
+
+{% endfor %}
+{% else %}
+No structured reference records were supplied.
+{% endif %}
+```
+
+## 7. Research coverage and limitations
+
+This section describes the scope of the automated search. Retrieval volume is not a measure of research quality, and search results do not establish that all relevant records have been found.
+
+- **Queries executed:** {{ c.queries_run }}
+- **Search providers:** {{ c.providers_used | join(", ") if c.providers_used else "Not recorded" }}
+- **Sources registered after deduplication:** {{ c.sources_registered }}
+- **Evidence date range:** {% if c.earliest_event %}{{ c.earliest_event }} to {{ c.latest_event }}{% else %}No dated events recorded{% endif %}
+- **Claims processed:** {{ c.claims_total }} total; {{ c.claims_reported }} reported.
+- **Claims outside the review window:** {{ c.out_of_window }}
+- **Undated claims:** {{ c.undated }}
+- **Excluded for identity mismatch:** {{ c.excluded_identity }}
+- **Excluded as unsupported or flagged:** {{ c.excluded_unsupported }}
+
+### Retrieval diagnostics
+
+| Retrieval outcome | Count |
+|---|---:|
+| Documents attempted | {{ c.retrieval.attempted }} |
+| Successfully fetched | {{ c.retrieval.fetched }} |
+| Failed | {{ c.retrieval.failed }} |
+| Timed out | {{ c.retrieval.timed_out }} |
+| Paywalled | {{ c.retrieval.paywalled }} |
+| Access denied | {{ c.retrieval.access_denied }} |
+| Blocked by robots.txt | {{ c.retrieval.robots_blocked }} |
+| Skipped after earlier refusals | {{ c.retrieval.memory_skipped }} |
+| Snippet-only evidence | {{ c.retrieval.snippet_only }} |
+
+{% if c.degraded %}
+### Known limitations
+
+{% for item in c.degraded %}
+- {{ item | esc }}
+{% endfor %}
+{% endif %}
+
+{% include "methodology.md.j2" %}
+
+---
+
+## Report audit metadata
+
+<small>
+Run ID: `{{ r.run_id }}` · Configuration: `{{ r.config_hash }}` · Template: {{ r.template_version }} · Schema: {{ r.schema_version }}
+</small>
+```

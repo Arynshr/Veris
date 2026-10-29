@@ -225,3 +225,6 @@ runs/
 
 # Test_runs
 test_results/
+
+# Veris memory
+.veris/

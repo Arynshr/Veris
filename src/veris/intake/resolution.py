@@ -2,29 +2,14 @@
 Subject resolution: when query understanding says the request names
 a role/group ("the board of directors of XYZ") rather than concrete names, the
 actual names aren't known yet and must be looked up before research can start.
-
-Fixed bug: previously every role term (singular or collective) was resolved
-by concatenating ALL search-result snippets together and pulling out every
-PERSON entity found anywhere in that blob. For a query like "CEO and CFO of
-Acme", each role search returned news articles that routinely also mention
-other board members, former executives, or journalists in the same snippet -
-all of which got added as resolved subjects. The result: asking for two
-named seats (CEO, CFO) silently expanded into a background check on the
-entire board. Singular, named seats ("CEO", "CFO", "president", "founder", ...)
-must resolve to exactly one person each; only genuinely collective phrases
-("board of directors", "executives", "leadership team", ...) may resolve to
-more than one, and even then only up to a small, dedicated cap
-(settings.max_group_role_size), scored by how often a name actually
-co-occurs with the role/org context rather than by mere presence anywhere
-in the result set.
 """
 
 import asyncio
-import json
 import re
 from collections import Counter
 
 from veris.core.config import Settings, get_logger
+from veris.core.ports import LLM
 from veris.core.models import (
     QueryUnderstanding,
     ResolvedSubject,
@@ -100,32 +85,19 @@ def _candidate_counts(
 
 
 def _llm_pick_singular(
-    role: str, organization: str | None, results: list[SearchResult], settings: Settings
+    role: str, organization: str | None, results: list[SearchResult], llm: LLM
 ) -> str | None:
-    """Best-effort precise pick for a single-seat role, used when a Groq key
+    """Best-effort precise pick for a single-seat role, used when an LLM
     is configured. Falls back silently to the frequency-based candidate on
     any failure - never raises."""
-    from groq import Groq
-
     if not results:
         return None
     snippets = "\n".join(f"- {r.title}: {r.snippet}" for r in results[:8])
     org_part = f" at {organization}" if organization else ""
     try:
-        client = Groq(api_key=settings.groq_api_key)
-        response = client.chat.completions.create(
-            model=settings.groq_model,
-            messages=[
-                {"role": "system", "content": _ROLE_EXTRACTION_PROMPT},
-                {
-                    "role": "user",
-                    "content": f"Role: {role}{org_part}\n\nSnippets:\n{snippets}",
-                },
-            ],
-            temperature=0.0,
-            response_format={"type": "json_object"},
+        data = llm.complete_json(
+            _ROLE_EXTRACTION_PROMPT, f"Role: {role}{org_part}\n\nSnippets:\n{snippets}"
         )
-        data = json.loads(response.choices[0].message.content)
         name = (data.get("name") or "").strip()
         if name and data.get("confidence", 0) >= 0.5:
             return name
@@ -143,6 +115,7 @@ async def resolve_subjects(
     settings: Settings,
     provider_chain: list[SearchProvider],
     search_cache: dict[str, list[SearchResult]] | None = None,
+    llm: LLM | None = None,
 ) -> list[ResolvedSubject]:
     explicit = [
         ResolvedSubject(
@@ -204,9 +177,9 @@ async def resolve_subjects(
             continue
 
         chosen: list[str] = []
-        if singular and settings.groq_api_key:
+        if singular and llm is not None:
             picked = await asyncio.to_thread(
-                _llm_pick_singular, role, understanding.organization, results, settings
+                _llm_pick_singular, role, understanding.organization, results, llm
             )
             if picked:
                 chosen = [picked]
